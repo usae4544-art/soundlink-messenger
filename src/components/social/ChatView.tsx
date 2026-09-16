@@ -90,9 +90,9 @@ export function ChatView({ chatId, currentUser, otherUser, onBack, onDecodeReque
   };
 
   return (
-    <div className="flex flex-col h-full bg-zinc-950/40 rounded-xl overflow-hidden border border-zinc-800/50 relative">
+    <div className="flex flex-col h-full bg-zinc-900/30 backdrop-blur-md rounded-2xl overflow-hidden border border-zinc-800/60 shadow-xl relative">
       {/* Header */}
-      <div className="p-3 border-b border-zinc-800 flex items-center gap-3 bg-zinc-900/80 backdrop-blur-sm z-10">
+      <div className="p-3.5 border-b border-zinc-800/80 flex items-center gap-3 bg-zinc-900/70 backdrop-blur-md z-10 shadow-sm">
         <button onClick={onBack} className="p-2 -ml-2 text-zinc-400 hover:text-white rounded-lg">
           <ArrowLeft className="w-5 h-5" />
         </button>
@@ -109,7 +109,7 @@ export function ChatView({ chatId, currentUser, otherUser, onBack, onDecodeReque
           const isMe = msg.senderId === currentUser.uid;
           return (
             <div key={msg.id} className={`flex ${isMe ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-[80%] rounded-2xl px-4 py-2.5 ${isMe ? 'bg-emerald-600 text-white rounded-tr-sm' : 'bg-zinc-800 text-zinc-200 rounded-tl-sm'}`}>
+              <div className={`max-w-[80%] rounded-2xl px-4 py-2.5 shadow-sm ${isMe ? 'bg-gradient-to-br from-emerald-500 to-emerald-600 text-white rounded-tr-sm' : 'bg-zinc-800/90 border border-zinc-700/50 text-zinc-100 rounded-tl-sm'}`}>
                 {msg.text && <div className="text-sm break-words">{msg.text}</div>}
                 {msg.soundUrl && (
                   <div className="mt-1 flex flex-col gap-2">
@@ -141,7 +141,7 @@ export function ChatView({ chatId, currentUser, otherUser, onBack, onDecodeReque
       </div>
 
       {/* Input */}
-      <form onSubmit={handleSendText} className="p-3 bg-zinc-900 border-t border-zinc-800 flex items-center gap-2">
+      <form onSubmit={handleSendText} className="p-3 bg-zinc-950/80 border-t border-zinc-800/80 flex items-center gap-2 backdrop-blur-md">
         <input 
           type="file" 
           ref={fileInputRef} 
@@ -162,12 +162,12 @@ export function ChatView({ chatId, currentUser, otherUser, onBack, onDecodeReque
           value={text}
           onChange={(e) => setText(e.target.value)}
           placeholder="Message..."
-          className="flex-1 min-w-0 bg-zinc-950 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-white placeholder-zinc-500 focus:border-emerald-500/50 focus:outline-none"
+          className="flex-1 min-w-0 bg-zinc-900/80 border border-zinc-700/50 rounded-xl px-4 py-2.5 text-sm text-white placeholder-zinc-500 focus:border-emerald-500/70 focus:ring-1 focus:ring-emerald-500/30 focus:outline-none transition-all shadow-inner"
         />
         <button 
           type="submit"
           disabled={(!text.trim() && !isSending) || isSending}
-          className="p-2.5 bg-emerald-500 hover:bg-emerald-400 text-zinc-950 rounded-xl disabled:opacity-50 transition-colors shrink-0"
+          className="p-2.5 bg-emerald-500 hover:bg-emerald-400 text-zinc-950 rounded-xl disabled:opacity-50 disabled:hover:bg-emerald-500 transition-all shrink-0 shadow-md hover:shadow-emerald-500/25 active:scale-95"
         >
           <Send className="w-5 h-5" />
         </button>

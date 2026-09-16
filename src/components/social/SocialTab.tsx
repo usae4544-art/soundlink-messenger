@@ -98,7 +98,7 @@ export function SocialTab({ user, userProfile, onDecodeRequest }: Props) {
   }
 
   return (
-    <div className="flex flex-col h-full bg-zinc-950/40 rounded-xl overflow-hidden border border-zinc-800/50">
+    <div className="flex flex-col h-full bg-zinc-900/30 backdrop-blur-md rounded-2xl overflow-hidden border border-zinc-800/60 shadow-lg">
       <div className="p-4 border-b border-zinc-800">
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />
@@ -107,7 +107,7 @@ export function SocialTab({ user, userProfile, onDecodeRequest }: Props) {
             placeholder="Search users by @username..." 
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full bg-zinc-900 border border-zinc-800 rounded-xl py-2.5 pl-9 pr-3 text-sm text-white placeholder-zinc-500 focus:border-emerald-500/50 focus:outline-none"
+            className="w-full bg-zinc-950/50 border border-zinc-800 rounded-xl py-3 pl-10 pr-4 text-sm text-white placeholder-zinc-500 focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/20 focus:outline-none transition-all shadow-inner"
           />
         </div>
       </div>
@@ -122,7 +122,7 @@ export function SocialTab({ user, userProfile, onDecodeRequest }: Props) {
             ) : searchResults.length > 0 ? (
               <div className="space-y-2">
                 {searchResults.map((r) => (
-                  <div key={r.uid} className="flex items-center justify-between bg-zinc-900 p-3 rounded-xl border border-zinc-800">
+                  <div key={r.uid} className="flex items-center justify-between bg-zinc-900/40 hover:bg-zinc-800/60 p-3.5 rounded-xl border border-zinc-800/50 transition-all duration-200 cursor-pointer shadow-sm">
                     <div className="flex items-center gap-3">
                       <img src={r.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${r.username}`} alt="" className="w-10 h-10 rounded-full bg-zinc-800" />
                       <div>
@@ -192,9 +192,9 @@ export function SocialTab({ user, userProfile, onDecodeRequest }: Props) {
                   <button 
                     key={friend.chatId} 
                     onClick={() => { setActiveChatId(friend.chatId); setActiveChatUser(friend.user); }}
-                    className="w-full flex items-center gap-3 bg-zinc-900 hover:bg-zinc-800 p-3 rounded-xl border border-zinc-800 transition-colors text-left"
+                    className="w-full flex items-center gap-3 bg-zinc-900/40 hover:bg-zinc-800/80 p-3.5 rounded-xl border border-zinc-800/50 transition-all duration-200 text-left shadow-sm group"
                   >
-                    <img src={friend.user?.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${friend.user?.username || 'user'}`} alt="" className="w-12 h-12 rounded-full bg-zinc-800" />
+                    <img src={friend.user?.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${friend.user?.username || 'user'}`} alt="" className="w-12 h-12 rounded-full bg-zinc-800 shadow-md ring-2 ring-transparent group-hover:ring-emerald-500/30 transition-all duration-300" />
                     <div className="flex-1 min-w-0">
                       <div className="flex justify-between items-center mb-0.5">
                         <span className="text-sm font-medium text-white truncate">{friend.user?.displayName || "Unknown User"}</span>
