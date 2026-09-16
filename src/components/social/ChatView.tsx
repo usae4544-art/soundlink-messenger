@@ -29,15 +29,24 @@ export function ChatView({ chatId, currentUser, otherUser, onBack, onDecodeReque
 
   const handleSendText = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!text.trim() || isSending) return;
-    setIsSending(true);
+    const msgText = text.trim();
+    if (!msgText || isSending) return;
+    
+    // Optimistic Update for instant feel
+    setText('');
+    setMessages(prev => [...prev, {
+      id: 'temp-' + Date.now(),
+      senderId: currentUser.uid,
+      text: msgText,
+      timestamp: Date.now()
+    }]);
+    
+    // setIsSending(true); // Don't block UI while sending text for instant feel
     try {
-      await sendMessage(chatId, currentUser.uid, text.trim());
-      setText('');
+      await sendMessage(chatId, currentUser.uid, msgText);
     } catch (err) {
       console.error(err);
-    } finally {
-      setIsSending(false);
+      alert("Failed to send message.");
     }
   };
 

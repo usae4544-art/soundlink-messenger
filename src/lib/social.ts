@@ -76,7 +76,7 @@ export const subscribeToIncomingRequests = (uid: string, callback: (reqs: any[])
       const data = await res.json();
       callback(data);
     } catch(e) {}
-    if (!isCancelled) setTimeout(poll, 2000);
+    if (!isCancelled) setTimeout(poll, 1000);
   };
   poll();
   return () => { isCancelled = true; };
@@ -91,7 +91,7 @@ export const subscribeToChats = (uid: string, callback: (chats: any[]) => void) 
       const data = await res.json();
       callback(data);
     } catch(e) {}
-    if (!isCancelled) setTimeout(poll, 2000);
+    if (!isCancelled) setTimeout(poll, 1000);
   };
   poll();
   return () => { isCancelled = true; };
@@ -106,7 +106,7 @@ export const subscribeToMessages = (chatId: string, callback: (msgs: any[]) => v
       const data = await res.json();
       callback(data);
     } catch(e) {}
-    if (!isCancelled) setTimeout(poll, 2000);
+    if (!isCancelled) setTimeout(poll, 1000);
   };
   poll();
   return () => { isCancelled = true; };
