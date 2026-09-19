@@ -32,7 +32,10 @@ export interface DecodedPayload {
   audioMeta?: AudioMetadata;
   rawBytes?: Uint8Array;
   time: string;
-  source: 'mic' | 'file' | 'broadcast';
+  source: 'mic' | 'file' | 'broadcast' | 'link';
+  token?: string;
+  senderName?: string;
+  createdAt?: number;
 }
 
 export type MotionMode = 'pulse' | 'ripple' | 'equalizer' | 'dance';
@@ -50,4 +53,6 @@ export interface SentHistoryItem {
   time: string;
   name?: string;
   previewUrl?: string;
+  shareUrl?: string;
+  token?: string;
 }

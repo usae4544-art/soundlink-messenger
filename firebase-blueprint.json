@@ -1,0 +1,105 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile with authentication and role details",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "username": { "type": "string" },
+        "searchName": { "type": "string" },
+        "role": { "type": "string" },
+        "suspended": { "type": "boolean" },
+        "premium": { "type": "boolean" },
+        "createdAt": { "type": "number" },
+        "lastActiveAt": { "type": "number" }
+      },
+      "required": ["uid"]
+    },
+    "FriendRequest": {
+      "title": "FriendRequest",
+      "description": "Friend requests sent between users",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "fromUid": { "type": "string" },
+        "toUid": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "accepted", "rejected"] },
+        "timestamp": { "type": "number" }
+      },
+      "required": ["id", "fromUid", "toUid", "status"]
+    },
+    "Chat": {
+      "title": "Chat",
+      "description": "Direct conversation between two users",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "participants": { "type": "array" },
+        "updatedAt": { "type": "number" },
+        "lastMessage": { "type": "string" },
+        "theme": { "type": "string" }
+      },
+      "required": ["id", "participants"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "Direct chat message",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "senderId": { "type": "string" },
+        "text": { "type": "string" },
+        "timestamp": { "type": "number" },
+        "soundUrl": { "type": "string" },
+        "fileUrl": { "type": "string" },
+        "fileType": { "type": "string" },
+        "expiresAt": { "type": "number" }
+      },
+      "required": ["id", "senderId", "timestamp"]
+    },
+    "Call": {
+      "title": "Call",
+      "description": "Real-time WebRTC voice or video call session",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "chatId": { "type": "string" },
+        "caller": { "type": "object" },
+        "receiver": { "type": "object" },
+        "type": { "type": "string", "enum": ["voice", "video"] },
+        "status": { "type": "string", "enum": ["ringing", "accepted", "declined", "ended", "busy"] },
+        "offer": { "type": "object" },
+        "answer": { "type": "object" },
+        "createdAt": { "type": "number" },
+        "endedAt": { "type": "number" }
+      },
+      "required": ["id", "caller", "receiver", "type", "status"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Stores user account details and status"
+    },
+    "/friendRequests/{requestId}": {
+      "schema": "FriendRequest",
+      "description": "Friend request states"
+    },
+    "/chats/{chatId}": {
+      "schema": "Chat",
+      "description": "Chat conversations"
+    },
+    "/chats/{chatId}/messages/{messageId}": {
+      "schema": "Message",
+      "description": "Messages inside a chat"
+    },
+    "/calls/{callId}": {
+      "schema": "Call",
+      "description": "WebRTC voice/video call signaling sessions"
+    }
+  }
+}

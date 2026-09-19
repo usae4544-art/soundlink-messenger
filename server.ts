@@ -8,11 +8,9 @@ import { createServer as createViteServer } from 'vite';
 
 const app = express();
 const PORT = 3000;
-
 app.use(cors());
 app.use(express.json({ limit: '200mb' }));
 
-// Ensure uploads dir exists
 const uploadsDir = path.join(process.cwd(), 'uploads');
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
@@ -28,30 +26,20 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-// File-Backed Database
 const DB_FILE = path.join(process.cwd(), 'database.json');
 let db = {
-  users: {} as Record<string, any>,
-  friendRequests: {} as Record<string, any>,
-  chats: {} as Record<string, any>,
-  messages: {} as Record<string, any[]>,
   vapidKeys: null as any
 };
-
 if (fs.existsSync(DB_FILE)) {
   try {
     const data = fs.readFileSync(DB_FILE, 'utf8');
     db = JSON.parse(data);
-  } catch (e) {
-    console.error("Failed to load database.json", e);
-  }
+  } catch (e) {}
 }
-
 function saveDb() {
   fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
 }
 
-// Initialize Web Push
 if (!db.vapidKeys) {
   db.vapidKeys = webpush.generateVAPIDKeys();
   saveDb();
@@ -62,158 +50,284 @@ app.get('/api/vapid-public-key', (req, res) => {
   res.send(db.vapidKeys.publicKey);
 });
 
-app.post('/api/subscribe', (req, res) => {
-  const { uid, subscription } = req.body;
-  if (!db.users[uid]) {
-    db.users[uid] = { uid }; // create dummy if missing somehow
+// We no longer save subscriptions on the server, we just use this endpoint to TRIGGER a push
+app.post('/api/send-push', async (req, res) => {
+  const { subscription, title, body, icon, url } = req.body;
+  if (subscription) {
+    const payload = JSON.stringify({ title, body, icon, url });
+    try {
+      await webpush.sendNotification(subscription, payload);
+    } catch (e) {
+      console.error("WebPush failed:", e);
+    }
   }
-  db.users[uid].pushSubscription = subscription;
-  saveDb();
   res.json({ success: true });
 });
 
-// --- API ROUTES ---
-
-// 1. Auth & Users
-app.post('/api/users/:uid', (req, res) => {
-  const { uid } = req.params;
-  db.users[uid] = { ...db.users[uid], ...req.body, uid };
-  saveDb();
-  res.json({ success: true, user: db.users[uid] });
-});
-
-app.get('/api/users/:uid', (req, res) => {
-  const user = db.users[req.params.uid];
-  if (user) res.json(user);
-  else res.status(404).json({ error: 'Not found' });
-});
-
-app.get('/api/check-username', (req, res) => {
-  const { username } = req.query;
-  const exists = Object.values(db.users).some(u => u.username === username);
-  res.json({ unique: !exists });
-});
-
-app.get('/api/search', (req, res) => {
-  const { q } = req.query;
-  if (!q || typeof q !== 'string') return res.json([]);
-  const term = q.toLowerCase();
-  const results = Object.values(db.users).filter(u => 
-    u.username?.toLowerCase().includes(term)
-  ).slice(0, 20);
-  res.json(results);
-});
-
-// Upload file endpoint
 app.post('/api/upload', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file' });
   const url = `/uploads/${req.file.filename}`;
   res.json({ url });
 });
 
-// 2. Friend Requests
-app.post('/api/requests', (req, res) => {
-  const { fromUid, toUid } = req.body;
-  const id = `${fromUid}_${toUid}`;
-  db.friendRequests[id] = { id, fromUid, toUid, status: 'pending', timestamp: Date.now() };
-  saveDb();
+app.post('/api/upload-chunk', upload.single('chunk'), (req, res) => {
+  const { originalName, chunkIndex, totalChunks, uploadId } = req.body;
+  if (!req.file) return res.status(400).json({ error: 'No chunk' });
   
-  // Push for Friend Request
-  const targetUser = db.users[toUid];
-  const senderUser = db.users[fromUid];
-  if (targetUser && targetUser.pushSubscription) {
-    const payload = JSON.stringify({
-      title: 'New Friend Request',
-      body: `${senderUser?.displayName || 'Someone'} sent you a friend request.`,
-      icon: senderUser?.photoURL || '/icon.svg',
-      url: '/'
-    });
-    webpush.sendNotification(targetUser.pushSubscription, payload).catch(e => console.error(e));
+  const tempDir = path.join(uploadsDir, 'temp_' + uploadId);
+  if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+  
+  const chunkPath = path.join(tempDir, chunkIndex);
+  fs.renameSync(req.file.path, chunkPath);
+  
+  if (parseInt(chunkIndex) === parseInt(totalChunks) - 1) {
+    const finalFilename = uploadId + '-' + originalName.replace(/[^a-zA-Z0-9.-]/g, '_');
+    const finalPath = path.join(uploadsDir, finalFilename);
+    const writeStream = fs.createWriteStream(finalPath);
+    
+    for (let i = 0; i < parseInt(totalChunks); i++) {
+      const data = fs.readFileSync(path.join(tempDir, i.toString()));
+      writeStream.write(data);
+    }
+    writeStream.end();
+    
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    
+    return res.json({ success: true, url: `/uploads/${finalFilename}` });
   }
   
   res.json({ success: true });
 });
 
-app.get('/api/requests/:uid', (req, res) => {
-  const { uid } = req.params;
-  const reqs = Object.values(db.friendRequests)
-    .filter(r => r.toUid === uid && r.status === 'pending')
-    .map(r => ({ ...r, user: db.users[r.fromUid] }));
-  res.json(reqs);
+// Payload Storage with Disk Persistence
+const PAYLOADS_FILE = path.join(process.cwd(), 'payloads.json');
+interface StoredPayload {
+  token: string;
+  type?: string;
+  dataUrl?: string;
+  meta?: any;
+  text?: string;
+  senderName?: string;
+  createdAt: number;
+  expiresAt: number;
+}
+
+const payloads = new Map<string, StoredPayload>();
+
+// Load persisted payloads if available
+if (fs.existsSync(PAYLOADS_FILE)) {
+  try {
+    const raw = fs.readFileSync(PAYLOADS_FILE, 'utf8');
+    const obj = JSON.parse(raw);
+    for (const [k, v] of Object.entries(obj)) {
+      payloads.set(k, v as StoredPayload);
+    }
+  } catch (e) {
+    console.error('Failed to load payloads.json', e);
+  }
+}
+
+function savePayloads() {
+  try {
+    const obj: Record<string, StoredPayload> = {};
+    for (const [k, v] of payloads.entries()) {
+      obj[k] = v;
+    }
+    fs.writeFileSync(PAYLOADS_FILE, JSON.stringify(obj, null, 2));
+  } catch (e) {
+    console.error('Failed to save payloads.json', e);
+  }
+}
+
+// Cleanup interval
+setInterval(() => {
+  const now = Date.now();
+  let deleted = false;
+  for (const [token, payload] of payloads.entries()) {
+    if (payload.expiresAt < now) {
+      payloads.delete(token);
+      deleted = true;
+    }
+  }
+  if (deleted) savePayloads();
+}, 60000);
+
+app.post('/api/upload-payload', (req, res) => {
+  const { token, dataUrl, meta, expiresIn, type, text, senderName } = req.body;
+  if (!token) return res.status(400).json({ error: 'Token is required' });
+  const expiresAt = expiresIn ? Date.now() + expiresIn : Date.now() + 48 * 60 * 60 * 1000;
+  
+  const inferredType = type || (meta?.mimeType?.startsWith('video') ? 'video' : meta?.mimeType?.startsWith('audio') ? 'audio' : dataUrl ? 'image' : 'text');
+  
+  payloads.set(token, { 
+    token,
+    type: inferredType,
+    dataUrl: dataUrl || '',
+    meta: meta || null,
+    text: text || '',
+    senderName: senderName || '',
+    createdAt: Date.now(),
+    expiresAt 
+  });
+  savePayloads();
+  res.json({ success: true, token });
 });
 
-app.post('/api/requests/:reqId/respond', (req, res) => {
-  const { reqId } = req.params;
-  const { status } = req.body;
-  if (db.friendRequests[reqId]) {
-    db.friendRequests[reqId].status = status;
-    if (status === 'accepted') {
-      const { fromUid, toUid } = db.friendRequests[reqId];
-      const chatId = [fromUid, toUid].sort().join('_');
-      if (!db.chats[chatId]) {
-        db.chats[chatId] = { id: chatId, participants: [fromUid, toUid], updatedAt: Date.now(), lastMessage: '' };
-        db.messages[chatId] = [];
+app.get('/api/payload/:token', (req, res) => {
+  const payload = payloads.get(req.params.token);
+  if (!payload || payload.expiresAt < Date.now()) {
+    if (payload) {
+      payloads.delete(req.params.token);
+      savePayloads();
+    }
+    return res.status(404).json({ error: 'Expired or not found' });
+  }
+  res.json({ 
+    success: true, 
+    token: payload.token,
+    type: payload.type,
+    dataUrl: payload.dataUrl, 
+    meta: payload.meta,
+    text: payload.text,
+    senderName: payload.senderName,
+    createdAt: payload.createdAt
+  });
+});
+
+app.post('/api/insights', (req, res) => {
+  // Mock insights for now if it doesn't exist
+  res.json({ success: true, text: "AI Insights generated for the payload. (Mocked)" });
+});
+
+// Storage Quota Management (Free tier quota 500MB)
+const TOTAL_STORAGE_QUOTA_BYTES = 500 * 1024 * 1024; // 500MB
+const WARNING_THRESHOLD_PERCENT = 60; // 60%
+const FILE_RETENTION_MS = 2 * 24 * 60 * 60 * 1000; // 2 days (48 hours)
+
+function getStorageMetrics() {
+  let usedBytes = 0;
+  let fileCount = 0;
+  const filesList: { name: string; fullPath: string; size: number; mtime: number }[] = [];
+
+  if (fs.existsSync(uploadsDir)) {
+    const entries = fs.readdirSync(uploadsDir);
+    for (const entry of entries) {
+      if (entry.startsWith('temp_')) continue;
+      const fullPath = path.join(uploadsDir, entry);
+      try {
+        const stat = fs.statSync(fullPath);
+        if (stat.isFile()) {
+          usedBytes += stat.size;
+          fileCount++;
+          filesList.push({
+            name: entry,
+            fullPath,
+            size: stat.size,
+            mtime: stat.mtimeMs
+          });
+        }
+      } catch (e) {}
+    }
+  }
+
+  const usagePercent = Math.min(100, Math.round((usedBytes / TOTAL_STORAGE_QUOTA_BYTES) * 100));
+  return {
+    usedBytes,
+    totalBytes: TOTAL_STORAGE_QUOTA_BYTES,
+    usagePercent,
+    fileCount,
+    isWarning: usagePercent >= WARNING_THRESHOLD_PERCENT,
+    warningThreshold: WARNING_THRESHOLD_PERCENT,
+    filesList
+  };
+}
+
+function runStorageCleanup(force = false) {
+  const metrics = getStorageMetrics();
+  let cleanedCount = 0;
+  let freedBytes = 0;
+
+  // Run cleanup if storage exceeds 60% or if forced
+  if (metrics.usagePercent >= WARNING_THRESHOLD_PERCENT || force) {
+    const now = Date.now();
+    // Sort oldest files first
+    const sortedFiles = metrics.filesList.sort((a, b) => a.mtime - b.mtime);
+
+    for (const file of sortedFiles) {
+      const ageMs = now - file.mtime;
+      // Delete if older than 2 days OR if forced
+      if (ageMs >= FILE_RETENTION_MS || force) {
+        try {
+          fs.unlinkSync(file.fullPath);
+          cleanedCount++;
+          freedBytes += file.size;
+        } catch (e) {
+          console.error("Failed to delete expired file:", file.name, e);
+        }
       }
     }
-    saveDb();
-    res.json({ success: true });
-  } else {
-    res.status(404).json({ error: 'Not found' });
+    console.log(`[Storage Cleanup] Cleaned ${cleanedCount} files, freed ${(freedBytes / 1024 / 1024).toFixed(2)} MB.`);
+  }
+
+  return { cleanedCount, freedBytes };
+}
+
+// Check every 30 minutes
+setInterval(() => {
+  try {
+    runStorageCleanup(false);
+  } catch (e) {
+    console.error("Periodic cleanup error", e);
+  }
+}, 30 * 60 * 1000);
+
+app.get('/api/storage-status', (req, res) => {
+  const metrics = getStorageMetrics();
+  res.json({
+    usedBytes: metrics.usedBytes,
+    totalBytes: metrics.totalBytes,
+    usagePercent: metrics.usagePercent,
+    fileCount: metrics.fileCount,
+    isWarning: metrics.isWarning,
+    warningThreshold: metrics.warningThreshold,
+    retentionDays: 2,
+    policy: "If storage exceeds 60%, uploaded attachments older than 2 days are automatically purged. Essential user account and Google profile photos are permanently protected.",
+    files: metrics.filesList.map(f => ({
+      name: f.name,
+      size: f.size,
+      mtime: f.mtime,
+      url: `/uploads/${f.name}`
+    }))
+  });
+});
+
+app.delete('/api/storage-file/:filename', (req, res) => {
+  const filename = path.basename(req.params.filename);
+  const targetPath = path.join(uploadsDir, filename);
+  if (!fs.existsSync(targetPath)) {
+    return res.status(404).json({ error: 'File not found' });
+  }
+  try {
+    const stat = fs.statSync(targetPath);
+    fs.unlinkSync(targetPath);
+    const metrics = getStorageMetrics();
+    res.json({ success: true, freedBytes: stat.size, metrics });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to delete file' });
   }
 });
 
-// 3. Chats & Messages
-app.get('/api/chats/:uid', (req, res) => {
-  const { uid } = req.params;
-  const userChats = Object.values(db.chats)
-    .filter(c => c.participants.includes(uid))
-    .map(c => {
-      const otherUid = c.participants.find((p: string) => p !== uid);
-      return { ...c, user: db.users[otherUid!] };
-    })
-    .sort((a, b) => b.updatedAt - a.updatedAt);
-  res.json(userChats);
+app.post('/api/cleanup-storage', (req, res) => {
+  const result = runStorageCleanup(true);
+  const metrics = getStorageMetrics();
+  res.json({
+    success: true,
+    ...result,
+    currentUsagePercent: metrics.usagePercent
+  });
 });
 
-app.get('/api/chats/:chatId/messages', (req, res) => {
-  const { chatId } = req.params;
-  res.json(db.messages[chatId] || []);
-});
 
-app.post('/api/chats/:chatId/messages', (req, res) => {
-  const { chatId } = req.params;
-  const msg = { id: Date.now().toString(), ...req.body, timestamp: Date.now() };
-  if (!db.messages[chatId]) db.messages[chatId] = [];
-  db.messages[chatId].push(msg);
-  if (db.chats[chatId]) {
-    db.chats[chatId].updatedAt = Date.now();
-    db.chats[chatId].lastMessage = msg.text || (msg.soundUrl ? '🎵 SoundLink' : '');
-  }
-  saveDb();
-  
-  // Send Web Push Notification
-  const chat = db.chats[chatId];
-  if (chat) {
-    const otherUid = chat.participants.find((p: string) => p !== msg.senderId);
-    const otherUser = db.users[otherUid];
-    const senderUser = db.users[msg.senderId];
-    if (otherUser && otherUser.pushSubscription) {
-      const payload = JSON.stringify({
-        title: `New message from ${senderUser?.displayName || 'Someone'}`,
-        body: msg.text || '🎵 Audio / SoundLink',
-        icon: senderUser?.photoURL || '/icon.svg',
-        url: '/'
-      });
-      webpush.sendNotification(otherUser.pushSubscription, payload).catch(err => {
-        console.error("WebPush Error:", err);
-      });
-    }
-  }
-
-  res.json({ success: true, message: msg });
-});
-
-// Vite middleware
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
@@ -228,7 +342,6 @@ async function startServer() {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
-
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on port ${PORT}`);
   });

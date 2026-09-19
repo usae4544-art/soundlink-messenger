@@ -4,10 +4,10 @@ export const FREQS = Array.from({ length: 16 }, (_, i) => 1000 + i * 100); // 10
 export const START_FREQ = 2700;
 export const STOP_FREQ = 2900;
 export const PAUSE_FREQ = 3100;
-export const TONE_DUR = 0.05; // 50ms per tone
-export const PAUSE_DUR = 0.025; // 25ms pause
-export const THRESHOLD_DB = -65;
-export const FREQ_TOLERANCE = 45;
+export const TONE_DUR = 0.15; // 50ms per tone
+export const PAUSE_DUR = 0.05; // 25ms pause
+export const THRESHOLD_DB = -75;
+export const FREQ_TOLERANCE = 48;
 
 export const MAGIC_HEADER = [0x5, 0xA, 0x3, 0xC];
 const SECRET = [0xF, 0x7, 0xA, 0x2];
@@ -560,6 +560,8 @@ function createDecoder(
   let currentTone: any = null;
   let nibbleBuffer: number[] = [];
   let currentDetectedFreq: number | null = null;
+  let consecutiveMatches = 0;
+  let candidateTone: any = null;
 
   function handleTone(tone: 'START' | 'STOP' | 'PAUSE' | number) {
     if (tone === 'PAUSE') return;
@@ -782,9 +784,22 @@ function createDecoder(
 
       if (matched === 'PAUSE') {
         currentTone = 'PAUSE';
-      } else if (matched !== null && matched !== currentTone) {
-        currentTone = matched;
-        handleTone(matched);
+        candidateTone = null;
+        consecutiveMatches = 0;
+      } else if (matched !== null) {
+        if (matched === candidateTone) {
+          consecutiveMatches++;
+          if (consecutiveMatches === 2 && matched !== currentTone) {
+            currentTone = matched;
+            handleTone(matched);
+          }
+        } else {
+          candidateTone = matched;
+          consecutiveMatches = 1;
+        }
+      } else {
+        candidateTone = null;
+        consecutiveMatches = 0;
       }
     } else {
       currentTone = null;

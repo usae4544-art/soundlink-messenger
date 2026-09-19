@@ -5,7 +5,15 @@
     @apply bg-zinc-950 text-zinc-100 font-sans antialiased overflow-x-hidden;
     background-image: radial-gradient(circle at 50% -20%, #18181b 0%, #09090b 70%);
     background-attachment: fixed;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
+}
+
+/* Fix any unwanted text overflow cutting */
+* {
+  overflow-wrap: break-word;
 }
 
 /* Custom Sleek Scrollbar */

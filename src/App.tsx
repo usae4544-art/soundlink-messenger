@@ -1,6 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { GoogleLogin, googleLogout } from '@react-oauth/google';
-import { jwtDecode } from 'jwt-decode';
+
+import { auth, loginWithFirebase, logoutFromFirebase, db } from './firebase';
+import { onAuthStateChanged } from 'firebase/auth';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 import {
   broadcastData,
   startListening,
@@ -34,39 +36,110 @@ import {
   Sparkles,
   Volume2,
   Info,
+  HardDrive,
+  Shield,
+  Crown,
+  Share2,
+  Link as LinkIcon,
 } from 'lucide-react';
-import { AudioAnalysis, DecodedPayload, ImageMetadata, VideoMetadata, AudioMetadata, MotionMode, SentHistoryItem } from './types';
+import { AudioAnalysis, DecodedPayload, ImageMetadata, VideoMetadata, AudioMetadata, MotionMode, SentHistoryItem, PayloadType } from './types';
 import { ProfileSetup } from './components/social/ProfileSetup';
 import { SocialTab } from './components/social/SocialTab';
+import { StorageManagerModal } from './components/StorageManagerModal';
+import { DeveloperPanel } from './components/social/DeveloperPanel';
 
 import { AudioReactiveImage } from './components/AudioReactiveImage';
+import { isDeveloperUser, DEVELOPER_EMAIL } from './lib/social';
 
 import { PWAInstallButton } from './components/PWAInstallButton';
+import { ShareLinkCard } from './components/ShareLinkCard';
+import { ReceivedFromLinkBanner, ManualPasteBar } from './components/ReceivedFromLinkBanner';
+import { 
+  publishSharePayload, 
+  fetchSharedPayload, 
+  playAcousticSoundForPayload, 
+  createAcousticToken 
+} from './lib/shareLink';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'send' | 'receive' | 'social'>('send');
   const [user, setUser] = useState<any>(null);
   const [userProfile, setUserProfile] = useState<any>(null);
   const [showProfileSetup, setShowProfileSetup] = useState(false);
+  const [showStorageManager, setShowStorageManager] = useState(false);
+  const [showDevPanel, setShowDevPanel] = useState(false);
   
   useEffect(() => {
+    // 1. Initial fast local restore
     const savedUser = localStorage.getItem('soundlink_user');
     if (savedUser) {
       try {
         const u = JSON.parse(savedUser);
         setUser(u);
-        fetch('/api/users/' + u.uid)
-          .then(r => r.json())
-          .then(data => {
-            if (!data.error) {
+        getDoc(doc(db, 'users', u.uid))
+          .then(docSnap => {
+            if (docSnap.exists()) {
+              const data = docSnap.data();
               setUserProfile(data);
               if (!data.username) setShowProfileSetup(true);
             } else {
               setShowProfileSetup(true);
             }
-          });
+          })
+          .catch(err => console.warn("Initial user fetch:", err));
       } catch (e) {}
     }
+
+    // 2. Reliable Firebase Auth state synchronization
+    const unsubAuth = onAuthStateChanged(auth, async (fbUser) => {
+      if (fbUser) {
+        const u = {
+          uid: fbUser.uid,
+          name: fbUser.displayName || 'User',
+          email: fbUser.email,
+          picture: fbUser.photoURL || '',
+        };
+        setUser(u);
+        localStorage.setItem('soundlink_user', JSON.stringify(u));
+
+        try {
+          const isDev = isDeveloperUser(fbUser.email);
+          const userRef = doc(db, 'users', fbUser.uid);
+          const userDoc = await getDoc(userRef);
+          if (userDoc.exists()) {
+            const data = userDoc.data();
+            if (isDev && data.role !== 'developer') {
+              await setDoc(userRef, { role: 'developer', isDeveloper: true }, { merge: true });
+              data.role = 'developer';
+              data.isDeveloper = true;
+            }
+            setUserProfile(data);
+            if (!data.username) setShowProfileSetup(true);
+          } else {
+            const newProfile: any = {
+              uid: u.uid,
+              email: u.email,
+              displayName: u.name,
+              photoURL: u.picture,
+              username: '',
+              searchName: '',
+              createdAt: Date.now()
+            };
+            if (isDev) {
+              newProfile.role = 'developer';
+              newProfile.isDeveloper = true;
+            }
+            await setDoc(userRef, newProfile);
+            setUserProfile(newProfile);
+            setShowProfileSetup(true);
+          }
+        } catch (e) {
+          console.warn("User auth state profile sync error:", e);
+        }
+      }
+    });
+
+    return () => unsubAuth();
   }, []);
 
   
@@ -97,11 +170,7 @@ export default function App() {
             applicationServerKey: convertedVapidKey
           });
 
-          await fetch('/api/subscribe', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ uid: user.uid, subscription })
-          });
+          await setDoc(doc(db, 'users', user.uid), { pushSubscription: subscription }, { merge: true });
           console.log("Subscribed to Web Push");
         }
       } catch (err) {
@@ -120,37 +189,98 @@ export default function App() {
     }
   }, [user?.uid]);
 
-  const loginWithGoogle = async (credentialResponse: any) => {
+  // Ensure microphone is strictly closed when switching away from receive tab
+  useEffect(() => {
+    if (activeTab !== 'receive') {
+      if (stopListeningRef.current) {
+        stopListeningRef.current();
+        stopListeningRef.current = null;
+        setIsListening(false);
+        setLiveHex('');
+        setAudioAnalysis({ overall: 0, bass: 0, mid: 0, treble: 0 });
+      }
+    }
+  }, [activeTab]);
+
+  const handleFirebaseLogin = async () => {
     try {
-      const decoded: any = jwtDecode(credentialResponse.credential!);
+      const fbUser = await loginWithFirebase();
       const u = {
-        uid: decoded.sub,
-        name: decoded.name,
-        email: decoded.email,
-        picture: decoded.picture
+        uid: fbUser.uid,
+        name: fbUser.displayName,
+        email: fbUser.email,
+        picture: fbUser.photoURL,
       };
       setUser(u);
       localStorage.setItem('soundlink_user', JSON.stringify(u));
       
-      const res = await fetch('/api/users/' + u.uid, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(u)
-      });
-      const data = await res.json();
-      setUserProfile(data.user);
-      if (!data.user.username) setShowProfileSetup(true);
+      const isDev = isDeveloperUser(fbUser.email);
+      const userRef = doc(db, 'users', fbUser.uid);
+      const userDoc = await getDoc(userRef);
+      
+      if (userDoc.exists()) {
+        const data = userDoc.data();
+        if (isDev && data.role !== 'developer') {
+          await setDoc(userRef, { role: 'developer', isDeveloper: true }, { merge: true });
+          data.role = 'developer';
+          data.isDeveloper = true;
+        }
+        setUserProfile(data);
+        if (!data.username) setShowProfileSetup(true);
+      } else {
+        const newProfile: any = { 
+          uid: u.uid,
+          email: u.email,
+          displayName: u.name,
+          photoURL: u.picture,
+          createdAt: Date.now()
+        };
+        if (isDev) {
+          newProfile.role = 'developer';
+          newProfile.isDeveloper = true;
+        }
+        await setDoc(userRef, newProfile);
+        setUserProfile(newProfile);
+        setShowProfileSetup(true);
+      }
     } catch (error) {
       console.error("Error signing in", error);
     }
   };
 
-  const handleLogout = () => {
-    googleLogout();
+  const handleLogout = async () => {
+    await logoutFromFirebase();
     setUser(null);
     setUserProfile(null);
     setSentHistory([]);
     localStorage.removeItem('soundlink_user');
+  };
+
+  const activateDeveloperSession = async () => {
+    const devUser = {
+      uid: 'dev_usae4544_root',
+      name: 'Developer (Root)',
+      email: DEVELOPER_EMAIL,
+      picture: 'https://api.dicebear.com/7.x/bottts/svg?seed=usae4544',
+    };
+    setUser(devUser);
+    localStorage.setItem('soundlink_user', JSON.stringify(devUser));
+    
+    const devProfile = {
+      uid: devUser.uid,
+      email: devUser.email,
+      displayName: 'Developer',
+      username: 'developer',
+      role: 'developer',
+      isDeveloper: true,
+      createdAt: Date.now()
+    };
+    setUserProfile(devProfile);
+    try {
+      await setDoc(doc(db, 'users', devUser.uid), devProfile, { merge: true });
+    } catch (e) {
+      console.warn("Could not save to firestore", e);
+    }
   };
 
   
@@ -174,8 +304,21 @@ export default function App() {
   const [isPreparingMedia, setIsPreparingMedia] = useState(false);
   const [sendProgress, setSendProgress] = useState(0);
   const [isDictating, setIsDictating] = useState(false);
+  const [broadcastExpiryMs, setBroadcastExpiryMs] = useState<number>(0);
   const [dictationNotice, setDictationNotice] = useState('');
   const [sentHistory, setSentHistory] = useState<SentHistoryItem[]>([]);
+  
+  // Share Link State
+  const [textAcousticToken, setTextAcousticToken] = useState<string>('');
+  const [generatedShareUrl, setGeneratedShareUrl] = useState<string>('');
+  const [lastSharedToken, setLastSharedToken] = useState<string>('');
+  const [isPublishingShare, setIsPublishingShare] = useState<boolean>(false);
+
+  // Link Recipient State (Listen tab)
+  const [linkReceivedPayload, setLinkReceivedPayload] = useState<DecodedPayload | null>(null);
+  const [isPlayingLinkSound, setIsPlayingLinkSound] = useState<boolean>(false);
+  const [linkSoundProgress, setLinkSoundProgress] = useState<number>(0);
+  const [isManualDecoding, setIsManualDecoding] = useState<boolean>(false);
 
   // Audio Motion State
   const [motionMode, setMotionMode] = useState<MotionMode>('pulse');
@@ -242,19 +385,193 @@ export default function App() {
   };
 
   useEffect(() => {
-    // Check if microphone permission is already granted, if so auto-start
-    if (navigator.permissions && navigator.permissions.query) {
-      navigator.permissions.query({ name: 'microphone' as PermissionName }).then((status) => {
-        if (status.state === 'granted' && !isListening) {
-          toggleListening();
-        }
-      }).catch(() => {});
-    }
-
+    // Only clean up microphone on unmount.
+    // Microphone is NEVER auto-started without explicit user action.
     return () => {
       if (stopListeningRef.current) stopListeningRef.current();
     };
   }, []);
+
+  // Listen Tab: Detect URL share link on mount (?listenToken=... or ?share=...)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const searchParams = new URLSearchParams(window.location.search);
+    const hashParams = new URLSearchParams(window.location.hash.startsWith('#') ? window.location.hash.slice(1) : '');
+    const token =
+      searchParams.get('listenToken') ||
+      searchParams.get('share') ||
+      searchParams.get('token') ||
+      hashParams.get('listenToken') ||
+      hashParams.get('token');
+
+    const typeHint = (searchParams.get('type') || hashParams.get('type')) as PayloadType | undefined;
+    const textHint = searchParams.get('t') || hashParams.get('t') || undefined;
+
+    if (token) {
+      // 1. Direct navigation to Listen tab
+      setActiveTab('receive');
+      setLiveHex(`LINK_PASTED: Acoustic Token [#${token}] detected! Loading payload...`);
+
+      // 2. Fetch and decode payload
+      (async () => {
+        try {
+          const payload = await fetchSharedPayload(token, typeHint, textHint);
+          if (payload) {
+            setLinkReceivedPayload(payload);
+            setReceivedMessages((prev) => {
+              if (prev.some((p) => p.token === token || (p.text && payload.text && p.text === payload.text))) {
+                return prev;
+              }
+              return [payload, ...prev];
+            });
+            setLiveHex(`DECODED_FROM_LINK: Token [#${token}] - ${payload.type.toUpperCase()} ready!`);
+          } else {
+            setReceiveError(`Could not find shared payload for token #${token}. It may have expired.`);
+            setLiveHex(`TOKEN_EXPIRED_OR_NOT_FOUND: #${token}`);
+          }
+        } catch (err: any) {
+          setReceiveError(`Error loading shared payload: ${err.message || err}`);
+        }
+      })();
+    }
+  }, []);
+
+  // Text Mode: auto-generate acoustic token and share link on text changes
+  useEffect(() => {
+    if (sendMode === 'text' && message.trim()) {
+      const handler = setTimeout(() => {
+        const token = textAcousticToken || createAcousticToken('TXT');
+        if (!textAcousticToken) setTextAcousticToken(token);
+        publishSharePayload({
+          type: 'text',
+          token,
+          text: message.trim(),
+          expiresIn: broadcastExpiryMs > 0 ? broadcastExpiryMs : undefined,
+          senderName: userProfile?.username || user?.displayName || 'SoundLink User',
+        })
+          .then(({ shareUrl }) => {
+            setGeneratedShareUrl(shareUrl);
+            setLastSharedToken(token);
+          })
+          .catch(console.error);
+      }, 500);
+      return () => clearTimeout(handler);
+    }
+  }, [message, sendMode, broadcastExpiryMs, textAcousticToken]);
+
+  // Publish or re-publish share link
+  const ensureAndPublishShareLink = async (explicitUserAction: boolean = false): Promise<string | null> => {
+    let token = '';
+    let dataUrl: string | undefined;
+    let meta: any;
+    let text: string | undefined;
+
+    if (sendMode === 'image' && realImageDataUrl) {
+      token = imageAcousticToken || createAcousticToken('IMG');
+      dataUrl = realImageDataUrl;
+      meta = realImageMeta;
+    } else if (sendMode === 'video' && realVideoDataUrl) {
+      token = videoAcousticToken || createAcousticToken('VID');
+      dataUrl = realVideoDataUrl;
+      meta = realVideoMeta;
+    } else if (sendMode === 'audio' && realAudioDataUrl) {
+      token = audioAcousticToken || createAcousticToken('AUD');
+      dataUrl = realAudioDataUrl;
+      meta = realAudioMeta;
+    } else if (sendMode === 'text' && message.trim()) {
+      token = textAcousticToken || createAcousticToken('TXT');
+      text = message.trim();
+    }
+
+    if (!token) return null;
+
+    setIsPublishingShare(true);
+    try {
+      const { shareUrl } = await publishSharePayload({
+        type: sendMode,
+        token,
+        dataUrl,
+        meta,
+        text,
+        expiresIn: broadcastExpiryMs > 0 ? broadcastExpiryMs : undefined,
+        senderName: userProfile?.username || user?.displayName || 'SoundLink User',
+      });
+      setGeneratedShareUrl(shareUrl);
+      setLastSharedToken(token);
+      return shareUrl;
+    } catch (e) {
+      console.error('Failed to publish share payload', e);
+      return null;
+    } finally {
+      setIsPublishingShare(false);
+    }
+  };
+
+  // Listen Tab: Play acoustic sound wave for link-received payload
+  const handlePlayLinkAcousticSound = async () => {
+    if (!linkReceivedPayload || isPlayingLinkSound) return;
+    setIsPlayingLinkSound(true);
+    setLinkSoundProgress(0);
+
+    try {
+      const tokenOrText =
+        linkReceivedPayload.type === 'text'
+          ? linkReceivedPayload.text || 'text'
+          : linkReceivedPayload.token || 'SL-LINK';
+
+      await playAcousticSoundForPayload(
+        linkReceivedPayload.type,
+        tokenOrText,
+        (progress) => setLinkSoundProgress(progress),
+        receiveCanvasRef.current,
+        (analysis) => setAudioAnalysis(analysis)
+      );
+    } catch (e) {
+      console.error('Failed to play acoustic sound wave', e);
+    } finally {
+      setIsPlayingLinkSound(false);
+      setLinkSoundProgress(0);
+      setAudioAnalysis({ overall: 0, bass: 0, mid: 0, treble: 0 });
+    }
+  };
+
+  // Listen Tab: Manual Paste & Decode
+  const handleManualPasteAndDecode = async (rawInput: string) => {
+    setIsManualDecoding(true);
+    try {
+      let token = rawInput.trim();
+      let typeHint: PayloadType | undefined;
+      let textHint: string | undefined;
+
+      // Extract from full URL if pasted
+      if (token.includes('http://') || token.includes('https://') || token.includes('?')) {
+        try {
+          const parsed = new URL(token, window.location.origin);
+          const t =
+            parsed.searchParams.get('listenToken') ||
+            parsed.searchParams.get('share') ||
+            parsed.searchParams.get('token');
+          if (t) token = t;
+          typeHint = (parsed.searchParams.get('type') as PayloadType) || undefined;
+          textHint = parsed.searchParams.get('t') || undefined;
+        } catch (e) {}
+      }
+
+      if (token.startsWith('#')) token = token.slice(1);
+
+      setLiveHex(`MANUAL_PASTE: Processing token [#${token}]...`);
+      const payload = await fetchSharedPayload(token, typeHint, textHint);
+      if (payload) {
+        setLinkReceivedPayload(payload);
+        setReceivedMessages((prev) => [payload, ...prev]);
+        setLiveHex(`PASTED_AND_DECODED: Token [#${token}] - ${payload.type.toUpperCase()} received!`);
+      } else {
+        throw new Error(`Payload for token "${token}" was not found or has expired.`);
+      }
+    } finally {
+      setIsManualDecoding(false);
+    }
+  };
 
   // Handle Real Audio Upload
   const handleRealAudioUpload = (e: React.ChangeEvent<HTMLInputElement> | DragEvent | File) => {
@@ -292,6 +609,21 @@ export default function App() {
 
       storeAudioLocally(token, dataUrl, meta, file!);
       setIsPreparingMedia(false);
+
+      // Auto publish share link for audio
+      publishSharePayload({
+        type: 'audio',
+        token,
+        dataUrl,
+        meta,
+        expiresIn: broadcastExpiryMs > 0 ? broadcastExpiryMs : undefined,
+        senderName: userProfile?.username || user?.displayName || 'SoundLink User',
+      })
+        .then(({ shareUrl }) => {
+          setGeneratedShareUrl(shareUrl);
+          setLastSharedToken(token);
+        })
+        .catch(console.error);
     }, 50);
   };
 
@@ -331,6 +663,21 @@ export default function App() {
 
       storeVideoLocally(token, dataUrl, meta, file!);
       setIsPreparingMedia(false);
+
+      // Auto publish share link for video
+      publishSharePayload({
+        type: 'video',
+        token,
+        dataUrl,
+        meta,
+        expiresIn: broadcastExpiryMs > 0 ? broadcastExpiryMs : undefined,
+        senderName: userProfile?.username || user?.displayName || 'SoundLink User',
+      })
+        .then(({ shareUrl }) => {
+          setGeneratedShareUrl(shareUrl);
+          setLastSharedToken(token);
+        })
+        .catch(console.error);
     }, 50);
   };
 
@@ -376,6 +723,21 @@ export default function App() {
           // Register in local acoustic memory store
           storeImageLocally(token, dataUrl, meta, file!);
           setIsPreparingMedia(false);
+
+          // Auto publish share link for photo
+          publishSharePayload({
+            type: 'image',
+            token,
+            dataUrl,
+            meta,
+            expiresIn: broadcastExpiryMs > 0 ? broadcastExpiryMs : undefined,
+            senderName: userProfile?.username || user?.displayName || 'SoundLink User',
+          })
+            .then(({ shareUrl }) => {
+              setGeneratedShareUrl(shareUrl);
+              setLastSharedToken(token);
+            })
+            .catch(console.error);
         };
         img.src = dataUrl;
       };
@@ -498,24 +860,26 @@ export default function App() {
     if (sendMode === 'video') { name = realVideoMeta?.name || 'Video'; previewUrl = realVideoDataUrl || ''; }
     if (sendMode === 'audio') { name = realAudioMeta?.name || 'Audio'; previewUrl = realAudioDataUrl || ''; }
 
+    const currentToken =
+      sendMode === 'image'
+        ? imageAcousticToken
+        : sendMode === 'video'
+        ? videoAcousticToken
+        : sendMode === 'audio'
+        ? audioAcousticToken
+        : textAcousticToken;
+
     const newItem: SentHistoryItem = {
       id: Math.random().toString(36).substring(2, 9),
       type: sendMode,
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
       name,
-      previewUrl
+      previewUrl,
+      shareUrl: generatedShareUrl || '',
+      token: currentToken || '',
     };
     
-    setSentHistory(prev => {
-      const updatedHistory = [newItem, ...prev];
-      // Sync to Backend
-      if (user) {
-        // We'll skip remote history sync for simplicity in this refactor, 
-        // since social history wasn't directly implemented in the backend schema,
-        // but local state is fine.
-      }
-      return updatedHistory;
-    });
+    setSentHistory(prev => [newItem, ...prev]);
   };
 
   const handleSend = async () => {
@@ -526,13 +890,15 @@ export default function App() {
     await new Promise((r) => setTimeout(r, 80));
 
     try {
+      // Ensure share link is published so recipient can decode via link
+      ensureAndPublishShareLink().catch(console.error);
       addToSentHistory();
       
       // Upload media to cloud in background for cross-device support
       if (sendMode !== 'text') {
         let payloadToken = '';
         let payloadDataUrl = '';
-        let payloadMeta = {};
+        let payloadMeta: any = {};
         
         if (sendMode === 'image') {
           payloadToken = imageAcousticToken;
@@ -549,15 +915,30 @@ export default function App() {
         }
         
         if (payloadToken && payloadDataUrl) {
-          fetch('/api/upload-payload', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              token: payloadToken,
-              dataUrl: payloadDataUrl,
-              meta: payloadMeta
-            })
-          }).catch(console.error); // Silently run in background
+          (async () => {
+            let finalDataUrl = payloadDataUrl;
+            if (finalDataUrl.startsWith('blob:')) {
+              try {
+                const res = await fetch(finalDataUrl);
+                const blob = await res.blob();
+                const formData = new FormData();
+                formData.append('file', blob, payloadMeta?.name || 'media.bin');
+                const upRes = await fetch('/api/upload', { method: 'POST', body: formData });
+                const upData = await upRes.json();
+                if (upData.url) finalDataUrl = upData.url;
+              } catch (e) { console.error('Upload failed', e); }
+            }
+            fetch('/api/upload-payload', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                token: payloadToken,
+                dataUrl: finalDataUrl,
+                meta: payloadMeta,
+                expiresIn: broadcastExpiryMs > 0 ? broadcastExpiryMs : undefined
+              })
+            }).catch(console.error);
+          })();
         }
       }
 
@@ -596,6 +977,57 @@ export default function App() {
         mediaPayload = retrieveAudioLocally(audioAcousticToken) || { dataUrl: realAudioDataUrl, meta: realAudioMeta };
       }
 
+      // Ensure share link is published
+      ensureAndPublishShareLink().catch(console.error);
+
+      // Upload to cloud as backup for WhatsApp/sharing which strips WAV metadata
+      if (sendMode !== 'text') {
+        let payloadToken = '';
+        let payloadDataUrl = '';
+        let payloadMeta: any = {};
+        
+        if (sendMode === 'image') {
+          payloadToken = imageAcousticToken;
+          payloadDataUrl = realImageDataUrl || '';
+          payloadMeta = realImageMeta || {};
+        } else if (sendMode === 'video') {
+          payloadToken = videoAcousticToken;
+          payloadDataUrl = realVideoDataUrl || '';
+          payloadMeta = realVideoMeta || {};
+        } else if (sendMode === 'audio') {
+          payloadToken = audioAcousticToken;
+          payloadDataUrl = realAudioDataUrl || '';
+          payloadMeta = realAudioMeta || {};
+        }
+        
+        if (payloadToken && payloadDataUrl) {
+          (async () => {
+            let finalDataUrl = payloadDataUrl;
+            if (finalDataUrl.startsWith('blob:')) {
+              try {
+                const res = await fetch(finalDataUrl);
+                const blob = await res.blob();
+                const formData = new FormData();
+                formData.append('file', blob, payloadMeta?.name || 'media.bin');
+                const upRes = await fetch('/api/upload', { method: 'POST', body: formData });
+                const upData = await upRes.json();
+                if (upData.url) finalDataUrl = upData.url;
+              } catch (e) { console.error('Upload failed', e); }
+            }
+            fetch('/api/upload-payload', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                token: payloadToken,
+                dataUrl: finalDataUrl,
+                meta: payloadMeta,
+                expiresIn: broadcastExpiryMs > 0 ? broadcastExpiryMs : undefined
+              })
+            }).catch(console.error);
+          })();
+        }
+      }
+      
       const blob = await generateWavBlob(sendMode, getPayloadToBroadcast(), mediaPayload);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -666,7 +1098,7 @@ export default function App() {
         setIsListening(false);
         setLiveHex('');
       },
-      canvasRef.current,
+      receiveCanvasRef.current,
       (analysis) => setAudioAnalysis(analysis)
     );
 
@@ -794,73 +1226,109 @@ export default function App() {
 
   return (
     <div className="min-h-screen text-zinc-100 flex items-center justify-center p-3 sm:p-6 font-sans selection:bg-emerald-500/30">
-      <div className="w-full max-w-3xl glass-panel rounded-3xl overflow-hidden flex flex-col animate-fade-in-up">
+      <div className="w-full max-w-3xl h-[95vh] sm:h-[90vh] glass-panel rounded-3xl overflow-hidden flex flex-col animate-fade-in-up">
         
         {/* Header */}
-        <div className="p-5 sm:p-6 border-b border-zinc-800 flex items-center justify-between">
-          <div className="flex items-center gap-3.5">
-            <div className="w-11 h-11 rounded-2xl bg-emerald-500/10 border border-emerald-500/25 flex items-center justify-center text-emerald-400 shadow-inner">
-              <Activity className="w-6 h-6" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-xl font-bold tracking-tight text-white">SoundLink</h1>
-                <span className="text-emerald-400 font-bold text-[10px] px-2 py-0.5 bg-emerald-500/15 rounded-full border border-emerald-500/30 tracking-wide uppercase hidden sm:inline-block">
-                  Real Image & Audio
-                </span>
+        <div className="p-3 sm:p-4 border-b border-zinc-800/80 bg-zinc-950/70 backdrop-blur-md flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-3">
+          <div className="flex items-center gap-2.5 sm:gap-3.5 min-w-0 w-full sm:w-auto justify-between sm:justify-start">
+            <div className="flex items-center gap-2.5 sm:gap-3.5 min-w-0">
+              <div className="w-9 h-9 sm:w-11 sm:h-11 rounded-2xl bg-emerald-500/10 border border-emerald-500/25 flex items-center justify-center text-emerald-400 shadow-inner shrink-0">
+                <Activity className="w-5 h-5 sm:w-6 sm:h-6" />
               </div>
-              <p className="text-xs text-zinc-400 mt-0.5 hidden sm:block">
-                Transmit real high-resolution photos & messages via acoustic sound waves
-              </p>
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+                  <h1 className="text-base sm:text-xl font-bold tracking-tight text-white whitespace-nowrap">SoundLink</h1>
+                  <span className="text-emerald-400 font-bold text-[9px] sm:text-[10px] px-2 py-0.5 bg-emerald-500/15 rounded-full border border-emerald-500/30 tracking-wide uppercase whitespace-nowrap">
+                    Real Image & Audio
+                  </span>
+                </div>
+                <p className="text-[11px] sm:text-xs text-zinc-400 mt-0.5 hidden sm:block whitespace-normal leading-tight">
+                  Transmit real high-resolution photos & messages via acoustic sound waves
+                </p>
+              </div>
+            </div>
+            
+            <div className="flex sm:hidden items-center gap-1.5 shrink-0">
+              <PWAInstallButton />
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            <div className="hidden sm:flex items-center gap-1.5 text-xs text-zinc-400 bg-zinc-950 px-3 py-1.5 rounded-full border border-zinc-800">
+          <div className="flex items-center justify-between sm:justify-end gap-1.5 sm:gap-2 flex-wrap shrink-0 w-full sm:w-auto">
+            <div className="hidden lg:flex items-center gap-1.5 text-xs text-zinc-400 bg-zinc-950 px-3 py-1.5 rounded-full border border-zinc-800 whitespace-nowrap">
               <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
               <span>Sound Motion Enabled</span>
             </div>
             
             {user ? (
-              <div className="flex items-center gap-2 bg-zinc-900 px-2 py-1 rounded-full border border-zinc-700">
-                <img 
-                  src={userProfile?.photoURL || user.picture} 
-                  alt="Profile" 
-                  className="w-6 h-6 rounded-full cursor-pointer hover:opacity-80" 
-                  onClick={() => setShowProfileSetup(true)}
-                  title="Edit Profile"
-                />
-                <span 
-                  className="text-xs text-zinc-300 hidden sm:block font-medium cursor-pointer hover:text-white"
+              <div className={`flex items-center gap-1.5 sm:gap-2 px-2 sm:px-2.5 py-1 rounded-full border ${isDeveloperUser(user?.email) || userProfile?.role === 'developer' || userProfile?.isDeveloper === true ? 'bg-amber-950/40 border-amber-500/50 shadow-sm shadow-amber-500/20' : 'bg-zinc-900 border-zinc-700'}`}>
+                <div className="relative shrink-0">
+                  <img 
+                    src={userProfile?.photoURL || user.picture} 
+                    alt="Profile" 
+                    className={`w-6 h-6 rounded-full cursor-pointer hover:opacity-80 object-cover ${isDeveloperUser(user?.email) || userProfile?.role === 'developer' || userProfile?.isDeveloper === true ? 'ring-1 ring-amber-400' : ''}`} 
+                    onClick={() => setShowProfileSetup(true)}
+                    title="Edit Profile"
+                  />
+                  {(isDeveloperUser(user?.email) || userProfile?.role === 'developer' || userProfile?.isDeveloper === true) && (
+                    <span className="absolute -bottom-1 -right-1 w-3 h-3 rounded-full bg-amber-400 flex items-center justify-center text-[7px] text-black font-extrabold">
+                      ★
+                    </span>
+                  )}
+                </div>
+                <div 
+                  className="flex items-center gap-1 sm:gap-1.5 cursor-pointer hover:text-white"
                   onClick={() => setShowProfileSetup(true)}
                   title="Edit Profile"
                 >
-                  {userProfile?.username ? '@'+userProfile.username : user.name}
-                </span>
+                  <span className="text-xs text-zinc-300 font-medium max-w-[100px] sm:max-w-[150px] truncate">
+                    {userProfile?.username ? '@'+userProfile.username : user.name}
+                  </span>
+                  {(isDeveloperUser(user?.email) || userProfile?.role === 'developer' || userProfile?.isDeveloper === true) && (
+                    <span className="text-[9px] sm:text-[10px] font-bold px-1.5 sm:px-2 py-0.5 rounded-full bg-gradient-to-r from-amber-500/30 to-yellow-500/30 text-amber-400 border border-amber-500/50 uppercase tracking-wider whitespace-nowrap">
+                      Developer
+                    </span>
+                  )}
+                </div>
                 <button
                   onClick={() => {
                     handleLogout();
                   }}
-                  className="text-xs text-zinc-400 hover:text-white px-2"
+                  className="text-xs text-zinc-400 hover:text-white px-1 sm:px-1.5 transition-colors whitespace-nowrap"
                 >
                   Logout
                 </button>
               </div>
             ) : (
               <div className="overflow-hidden rounded-md h-[34px] flex items-center justify-center">
-                <GoogleLogin
-                  onSuccess={loginWithGoogle}
-                  onError={() => {
-                    console.log('Login Failed');
-                  }}
-                  size="small"
-                  type="standard"
-                  theme="filled_black"
-                />
+                <button onClick={handleFirebaseLogin} className="flex items-center gap-2 bg-zinc-800 text-white px-3 py-1.5 rounded-lg font-medium hover:bg-zinc-700 transition-colors border border-zinc-700 text-xs whitespace-nowrap">
+                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24"><path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+                  Login
+                </button>
               </div>
             )}
             
-            <PWAInstallButton />
+            {/* Direct Developer Panel Button for instant full access across all devices */}
+            <button
+              onClick={() => setShowDevPanel(true)}
+              className="px-2 sm:px-2.5 py-1.5 rounded-xl bg-gradient-to-r from-amber-500/20 to-yellow-500/20 hover:from-amber-500/30 hover:to-yellow-500/30 border border-amber-500/40 text-amber-300 text-xs font-bold flex items-center gap-1.5 transition-all shadow-md active:scale-95 shrink-0"
+              title="Open Developer Control Panel"
+            >
+              <Crown className="w-3.5 h-3.5 text-amber-400" />
+              <span className="whitespace-nowrap">Developer</span>
+            </button>
+            
+            <button
+              onClick={() => setShowStorageManager(true)}
+              className="p-1.5 sm:px-2.5 sm:py-1.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-700/60 text-xs font-medium flex items-center gap-1.5 transition-colors active:scale-95 shrink-0"
+              title="Manage Cloud Storage & Uploads"
+            >
+              <HardDrive className="w-3.5 h-3.5 text-emerald-400" />
+              <span className="hidden sm:inline whitespace-nowrap">Storage</span>
+            </button>
+            
+            <div className="hidden sm:block">
+              <PWAInstallButton />
+            </div>
           </div>
         </div>
 
@@ -905,20 +1373,20 @@ export default function App() {
           <ProfileSetup 
             user={user} 
             existingProfile={userProfile} 
-            onComplete={() => setShowProfileSetup(false)} 
+            onComplete={(updatedProfile) => { if (updatedProfile) setUserProfile({...userProfile, ...updatedProfile}); setShowProfileSetup(false); }} 
             onClose={userProfile?.username ? () => setShowProfileSetup(false) : undefined}
           />
         )}
         
         {/* Content Body */}
-        <div className="p-5 sm:p-6">
+        <div className="p-3 sm:p-6 flex-1 overflow-hidden flex flex-col">
           
           {activeTab === 'social' && user && userProfile ? (
-            <div className="h-[600px] animate-in fade-in duration-200">
+            <div className="flex-1 animate-in fade-in duration-200 flex flex-col h-full min-h-[400px]">
               <SocialTab user={user} userProfile={userProfile} onDecodeRequest={handleDecodeRemoteFile} />
             </div>
           ) : activeTab === 'send' ? (
-            <div className="space-y-6 animate-in fade-in duration-200">
+            <div className="space-y-6 animate-in fade-in duration-200 pb-10 overflow-y-auto h-full pr-2">
               
               {/* Broadcast Mode Toggle */}
               <div className="flex flex-wrap gap-2 p-1.5 bg-zinc-950/80 rounded-2xl border border-zinc-800 shadow-inner">
@@ -971,8 +1439,19 @@ export default function App() {
                     <label className="text-sm font-medium text-zinc-300 flex items-center gap-2">
                       <span>Original Photo</span>
                       <span className="text-[11px] text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
-                        100% Real Quality (No Dots)
+                        100% Real Quality
                       </span>
+                      <select
+                        value={broadcastExpiryMs}
+                        onChange={(e) => setBroadcastExpiryMs(Number(e.target.value))}
+                        className="bg-zinc-800/80 text-zinc-300 text-[10px] rounded-lg px-2 py-1 border border-zinc-700 outline-none focus:border-emerald-500/50 ml-2"
+                        title="Auto-delete timer"
+                      >
+                        <option value={0}>Keep</option>
+                        <option value={60000}>1 Min</option>
+                        <option value={3600000}>1 Hour</option>
+                        <option value={86400000}>24 Hours</option>
+                      </select>
                     </label>
 
                     {realImageDataUrl && (
@@ -1215,7 +1694,19 @@ export default function App() {
                 <div className="space-y-2 relative">
                   <div className="flex justify-between items-end mb-1">
                     <label className="text-sm font-medium text-zinc-300">Message to Broadcast</label>
-                    <button
+                    <div className="flex items-center gap-2">
+                      <select
+                      value={broadcastExpiryMs}
+                      onChange={(e) => setBroadcastExpiryMs(Number(e.target.value))}
+                      className="bg-zinc-800/80 text-zinc-300 text-[10px] rounded-lg px-2 py-1 border border-zinc-700 outline-none focus:border-emerald-500/50"
+                      title="Auto-delete timer"
+                    >
+                      <option value={0}>Keep</option>
+                      <option value={60000}>1 Min</option>
+                      <option value={3600000}>1 Hour</option>
+                      <option value={86400000}>24 Hours</option>
+                    </select>
+                      <button
                       onClick={startDictation}
                       disabled={isDictating || isSending}
                       className={`flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-lg transition-colors ${
@@ -1227,6 +1718,7 @@ export default function App() {
                       <MicIcon className="w-3.5 h-3.5" />
                       {isDictating ? 'Listening to voice...' : 'Voice Translate'}
                     </button>
+                  </div>
                   </div>
 
                   {dictationNotice && (
@@ -1296,11 +1788,64 @@ export default function App() {
                 </button>
               </div>
 
+              {/* Share Link Generation Card */}
+              {((sendMode === 'image' && realImageDataUrl) ||
+                (sendMode === 'video' && realVideoDataUrl) ||
+                (sendMode === 'audio' && realAudioDataUrl) ||
+                (sendMode === 'text' && message.trim())) && (
+                <div className="mt-2">
+                  {generatedShareUrl &&
+                  lastSharedToken ===
+                    (sendMode === 'image'
+                      ? imageAcousticToken
+                      : sendMode === 'video'
+                      ? videoAcousticToken
+                      : sendMode === 'audio'
+                      ? audioAcousticToken
+                      : textAcousticToken) ? (
+                    <ShareLinkCard
+                      type={sendMode}
+                      token={lastSharedToken}
+                      shareUrl={generatedShareUrl}
+                      itemName={
+                        sendMode === 'image'
+                          ? realImageMeta?.name
+                          : sendMode === 'video'
+                          ? realVideoMeta?.name
+                          : sendMode === 'audio'
+                          ? realAudioMeta?.name
+                          : message.slice(0, 30)
+                      }
+                      onPlaySound={handleSend}
+                      isPlayingSound={isSending}
+                    />
+                  ) : (
+                    <button
+                      onClick={() => ensureAndPublishShareLink(true)}
+                      disabled={isPublishingShare || isBroadcastDisabled()}
+                      className="w-full py-3.5 px-4 bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 rounded-2xl text-xs font-bold flex items-center justify-center gap-2 transition-all shadow-md active:scale-95"
+                    >
+                      {isPublishingShare ? (
+                        <>
+                          <RefreshCw className="w-4 h-4 animate-spin text-emerald-400" />
+                          <span>Generating Acoustic Sound & Share Link...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Share2 className="w-4 h-4 text-emerald-400" />
+                          <span>Generate Sound Wave & Share Link</span>
+                        </>
+                      )}
+                    </button>
+                  )}
+                </div>
+              )}
+
               {/* Helpful Hint */}
               <div className="p-3 bg-zinc-950/50 rounded-xl border border-zinc-800/80 flex items-start gap-2.5 text-xs text-zinc-400">
                 <Info className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
                 <p>
-                  <strong>How it works:</strong> "Play Sound" broadcasts short acoustic frequencies through your speakers. The receiving device hears the sound and instantly pulls the associated high-quality media via the cloud!
+                  <strong>How it works:</strong> "Play Sound" broadcasts short acoustic frequencies through your speakers, while the <strong>SoundLink Share Link</strong> lets anyone click to automatically paste the sound and decode your {sendMode === 'image' ? 'photo' : sendMode === 'video' ? 'video' : sendMode === 'audio' ? 'song' : 'message'}!
                 </p>
               </div>
 
@@ -1323,7 +1868,24 @@ export default function App() {
                             <CheckCircle2 className="w-3.5 h-3.5" />
                             {item.type === 'text' ? 'Text Payload' : item.type === 'audio' ? 'Audio Payload' : item.type === 'video' ? 'Video Payload' : 'Image Payload'}
                           </span>
-                          <span className="text-zinc-500 text-[11px]">{item.time}</span>
+                          <div className="flex items-center gap-2">
+                            {item.shareUrl && (
+                              <button
+                                onClick={async () => {
+                                  try {
+                                    await navigator.clipboard.writeText(item.shareUrl!);
+                                    setLiveHex(`COPIED: Share link for #${item.token || 'item'} copied!`);
+                                  } catch (e) {}
+                                }}
+                                className="text-[11px] px-2 py-0.5 rounded bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/25 flex items-center gap-1 transition-all"
+                                title="Copy direct share link"
+                              >
+                                <Share2 className="w-3 h-3" />
+                                <span>Copy Link</span>
+                              </button>
+                            )}
+                            <span className="text-zinc-500 text-[11px]">{item.time}</span>
+                          </div>
                         </div>
                         <div className="flex items-center gap-3">
                           {item.previewUrl && item.type === 'image' && (
@@ -1355,8 +1917,29 @@ export default function App() {
             </div>
           ) : (
             /* Receive Tab */
-            <div className="space-y-6 animate-in fade-in duration-200">
+            <div className="space-y-6 animate-in fade-in duration-200 overflow-y-auto h-full pb-10 pr-2">
               
+              {/* Received from Share Link Celebration Banner */}
+              {linkReceivedPayload && (
+                <ReceivedFromLinkBanner
+                  payload={linkReceivedPayload}
+                  onPlaySound={handlePlayLinkAcousticSound}
+                  isPlayingSound={isPlayingLinkSound}
+                  soundProgress={linkSoundProgress}
+                  onDismiss={() => setLinkReceivedPayload(null)}
+                  onScrollToItem={() => {
+                    const el = document.getElementById('decoded-feed');
+                    if (el) el.scrollIntoView({ behavior: 'smooth' });
+                  }}
+                />
+              )}
+
+              {/* Manual SoundLink URL or Token Paste Bar */}
+              <ManualPasteBar
+                onPasteAndDecode={handleManualPasteAndDecode}
+                isLoading={isManualDecoding}
+              />
+
               {/* Receiver Spectrum Display */}
               <div className="h-32 bg-zinc-950 rounded-2xl border border-zinc-800 flex flex-col items-center justify-center relative overflow-hidden">
                 <canvas
@@ -1440,7 +2023,7 @@ export default function App() {
 
               {/* Decoded Messages / Images Feed */}
               {receivedMessages.length > 0 ? (
-                <div className="space-y-4">
+                <div id="decoded-feed" className="space-y-4">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">
                       Decoded Payloads ({receivedMessages.length})
@@ -1457,16 +2040,47 @@ export default function App() {
                     {receivedMessages.map((msg) => (
                       <div
                         key={msg.id}
-                        className="p-4 rounded-2xl glass-panel text-sm flex flex-col gap-3 shadow-md animate-fade-in-up"
+                        className={`p-4 rounded-2xl glass-panel text-sm flex flex-col gap-3 shadow-md animate-fade-in-up ${
+                          msg.source === 'link' ? 'border-emerald-500/40 shadow-[0_0_15px_rgba(16,185,129,0.15)]' : ''
+                        }`}
                       >
-                        <div className="flex items-center justify-between text-xs text-zinc-400">
-                          <span className="flex items-center gap-1.5 font-medium text-emerald-400">
-                            <CheckCircle2 className="w-3.5 h-3.5" />
-                            {msg.type === 'text' ? 'Acoustic Text' : msg.type === 'audio' ? 'Fast Real Audio' : msg.type === 'video' ? 'Fast Real Video' : 'Real Original Photo'}
-                          </span>
+                        <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-400">
                           <div className="flex items-center gap-2">
-                            <span className="bg-zinc-900 px-2 py-0.5 rounded-md border border-zinc-800 text-[11px]">
-                              {msg.source === 'mic' ? 'Microphone' : 'Audio File'}
+                            <span className="flex items-center gap-1.5 font-medium text-emerald-400">
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              {msg.type === 'text' ? 'Acoustic Text' : msg.type === 'audio' ? 'Fast Real Audio' : msg.type === 'video' ? 'Fast Real Video' : 'Real Original Photo'}
+                            </span>
+                            {msg.token && (
+                              <span className="bg-emerald-500/10 text-emerald-300 font-mono text-[10px] px-2 py-0.5 rounded border border-emerald-500/20 font-semibold">
+                                #{msg.token}
+                              </span>
+                            )}
+                          </div>
+                          
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={async () => {
+                                const tokenOrText = msg.type === 'text' ? (msg.text || 'text') : (msg.token || 'SL-LINK');
+                                try {
+                                  await playAcousticSoundForPayload(msg.type, tokenOrText, undefined, receiveCanvasRef.current);
+                                } catch (e) {
+                                  console.error(e);
+                                }
+                              }}
+                              className="text-[11px] px-2.5 py-1 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/25 rounded-lg font-medium flex items-center gap-1.5 transition-all active:scale-95"
+                              title="Play the acoustic sound wave that encodes this file"
+                            >
+                              <Volume2 className="w-3.5 h-3.5 text-emerald-400" />
+                              <span>Play Sound Wave</span>
+                            </button>
+
+                            <span className="bg-zinc-900 px-2 py-0.5 rounded-md border border-zinc-800 text-[11px] flex items-center gap-1">
+                              {msg.source === 'link' ? (
+                                <>
+                                  <Share2 className="w-3 h-3 text-emerald-400" />
+                                  <span className="text-emerald-300 font-medium">Direct Link</span>
+                                </>
+                              ) : msg.source === 'mic' ? 'Microphone' : 'Audio File'}
                             </span>
                             <span className="text-zinc-500 text-[11px]">{msg.time}</span>
                           </div>
@@ -1686,6 +2300,20 @@ export default function App() {
         </div>
       </div>
     
+      {/* Storage Manager Modal */}
+      {showStorageManager && (
+        <StorageManagerModal onClose={() => setShowStorageManager(false)} />
+      )}
+
+      {/* Developer Master Panel Modal */}
+      {showDevPanel && (
+        <DeveloperPanel 
+          onClose={() => setShowDevPanel(false)} 
+          currentUser={user}
+          onActivateDeveloper={activateDeveloperSession}
+        />
+      )}
+
       {/* Mic Permission Modal */}
       {showMicModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
