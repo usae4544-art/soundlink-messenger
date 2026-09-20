@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { subscribeToAllUsers, setUserSuspendedStatus, DEVELOPER_EMAIL } from '../../lib/social';
+import { subscribeToAllUsers, setUserSuspendedStatus, DEVELOPER_EMAIL, isDeveloperUser } from '../../lib/social';
 import {
   Shield,
   ShieldAlert,
@@ -24,10 +24,9 @@ import {
 interface Props {
   onClose: () => void;
   currentUser?: any;
-  onActivateDeveloper?: () => void;
 }
 
-export function DeveloperPanel({ onClose, currentUser, onActivateDeveloper }: Props) {
+export function DeveloperPanel({ onClose, currentUser }: Props) {
   const [users, setUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [storageStats, setStorageStats] = useState<any>(null);
@@ -163,25 +162,7 @@ export function DeveloperPanel({ onClose, currentUser, onActivateDeveloper }: Pr
 
         {/* Content Body */}
         <div className="flex-1 overflow-y-auto p-3 sm:p-5 space-y-4 sm:space-y-6">
-          {/* Quick Root Activation Banner if not current dev */}
-          {(!currentUser || currentUser.email !== DEVELOPER_EMAIL) && onActivateDeveloper && (
-            <div className="p-3.5 rounded-2xl bg-gradient-to-r from-amber-500/15 via-yellow-500/15 to-amber-500/10 border border-amber-500/40 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-md">
-              <div className="flex items-start gap-2.5 min-w-0">
-                <Crown className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
-                <div className="text-xs text-amber-200 leading-relaxed">
-                  <span className="font-bold text-white block mb-0.5">Activate Root Developer Permissions</span>
-                  Log in as <b className="text-amber-300">{DEVELOPER_EMAIL}</b> to manage all users, delete files, and access root VIP tools on any mobile or desktop device.
-                </div>
-              </div>
-              <button
-                onClick={onActivateDeveloper}
-                className="w-full sm:w-auto px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold text-xs shadow-lg shadow-amber-500/20 transition-all shrink-0 active:scale-95 flex items-center justify-center gap-1.5"
-              >
-                <Crown className="w-3.5 h-3.5" />
-                <span>Activate Developer Account</span>
-              </button>
-            </div>
-          )}
+
           {/* Storage & Quota Monitor */}
           <div className="p-3.5 sm:p-5 rounded-2xl bg-zinc-950/70 border border-zinc-800 shadow-inner space-y-3.5">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
@@ -450,7 +431,7 @@ export function DeveloperPanel({ onClose, currentUser, onActivateDeveloper }: Pr
             ) : (
               <div className="space-y-2.5">
                 {filteredUsers.map((u) => {
-                  const isDev = u.email === DEVELOPER_EMAIL || u.role === 'developer';
+                  const isDev = isDeveloperUser(u.email);
                   const isSuspended = !!u.suspended;
 
                   return (

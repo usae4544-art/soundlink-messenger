@@ -64,7 +64,7 @@ export function SocialTab({ user, userProfile, onDecodeRequest }: Props) {
   const [showDevPanel, setShowDevPanel] = useState(false);
   const [showStorageModal, setShowStorageModal] = useState(false);
   const [chatStorageTarget, setChatStorageTarget] = useState<any | null>(null);
-  const isDev = isDeveloperUser(user?.email) || userProfile?.role === 'developer' || userProfile?.isDeveloper === true;
+  const isDev = isDeveloperUser(user?.email);
 
   // Storage metrics state
   const [storageMetrics, setStorageMetrics] = useState<any>(null);
@@ -348,7 +348,7 @@ export function SocialTab({ user, userProfile, onDecodeRequest }: Props) {
                 ) : searchResults.length > 0 ? (
                   <div className="space-y-2">
                     {searchResults.map((r) => {
-                      const isDevAccount = isDeveloperUser(r.email) || r.role === 'developer';
+                      const isDevAccount = isDeveloperUser(r.email);
                       return (
                         <div
                           key={r.uid}
@@ -458,7 +458,7 @@ export function SocialTab({ user, userProfile, onDecodeRequest }: Props) {
                 ) : friends.length > 0 ? (
                   <div className="space-y-2">
                     {friends.map((friend) => {
-                      const isOtherDev = isDeveloperUser(friend.user?.email) || friend.user?.role === 'developer';
+                      const isOtherDev = isDeveloperUser(friend.user?.email);
                       return (
                         <div
                           key={friend.chatId}

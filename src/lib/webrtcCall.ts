@@ -3,6 +3,7 @@ import {
   collection,
   doc,
   setDoc,
+  getDoc,
   updateDoc,
   onSnapshot,
   addDoc,
@@ -606,6 +607,29 @@ export class WebRTCCallService {
 
     await setDoc(doc(db, 'calls', callId), callData);
     playOutgoingRingtone();
+
+    // Trigger Push Notification to receiver if app is closed/backgrounded
+    try {
+      const receiverSnap = await getDoc(doc(db, 'users', receiver.uid));
+      if (receiverSnap.exists()) {
+        const rData = receiverSnap.data();
+        if (rData.pushSubscription) {
+          await fetch('/api/send-push', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              subscription: rData.pushSubscription,
+              title: `Incoming ${type === 'video' ? 'Video' : 'Voice'} Call`,
+              body: `${caller.name} is calling you...`,
+              icon: caller.photoURL || '/icon.svg',
+              url: '/'
+            })
+          });
+        }
+      }
+    } catch (e) {
+      console.warn("Call push notification failed:", e);
+    }
 
     // Listen for answer and status changes
     this.unsubCall = onSnapshot(doc(db, 'calls', callId), async (snap) => {

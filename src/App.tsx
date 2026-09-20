@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 
 import { auth, loginWithFirebase, logoutFromFirebase, db } from './firebase';
 import { onAuthStateChanged } from 'firebase/auth';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, deleteDoc } from 'firebase/firestore';
 import {
   broadcastData,
   startListening,
@@ -54,11 +54,14 @@ import { isDeveloperUser, DEVELOPER_EMAIL } from './lib/social';
 import { PWAInstallButton } from './components/PWAInstallButton';
 import { ShareLinkCard } from './components/ShareLinkCard';
 import { ReceivedFromLinkBanner, ManualPasteBar } from './components/ReceivedFromLinkBanner';
+import { WebRTCCallService, CallSession, subscribeToIncomingCalls } from './lib/webrtcCall';
+import { CallModal } from './components/social/CallModal';
 import { 
   publishSharePayload, 
   fetchSharedPayload, 
   playAcousticSoundForPayload, 
-  createAcousticToken 
+  createAcousticToken,
+  uploadBlobMedia
 } from './lib/shareLink';
 
 export default function App() {
@@ -103,6 +106,11 @@ export default function App() {
         localStorage.setItem('soundlink_user', JSON.stringify(u));
 
         try {
+          // Permanently clean up/delete any dummy root developer mock document if it exists
+          try {
+            await deleteDoc(doc(db, 'users', 'dev_usae4544_root'));
+          } catch (e) {}
+
           const isDev = isDeveloperUser(fbUser.email);
           const userRef = doc(db, 'users', fbUser.uid);
           const userDoc = await getDoc(userRef);
@@ -112,6 +120,11 @@ export default function App() {
               await setDoc(userRef, { role: 'developer', isDeveloper: true }, { merge: true });
               data.role = 'developer';
               data.isDeveloper = true;
+            } else if (!isDev && (data.role === 'developer' || data.isDeveloper)) {
+              // Strictly restrict developer role to usae4544@gmail.com only
+              await setDoc(userRef, { role: 'user', isDeveloper: false }, { merge: true });
+              data.role = 'user';
+              data.isDeveloper = false;
             }
             setUserProfile(data);
             if (!data.username) setShowProfileSetup(true);
@@ -128,6 +141,9 @@ export default function App() {
             if (isDev) {
               newProfile.role = 'developer';
               newProfile.isDeveloper = true;
+            } else {
+              newProfile.role = 'user';
+              newProfile.isDeveloper = false;
             }
             await setDoc(userRef, newProfile);
             setUserProfile(newProfile);
@@ -141,6 +157,20 @@ export default function App() {
 
     return () => unsubAuth();
   }, []);
+
+  // Global incoming call subscription for real-time ring, vibrate, and notifications across all tabs
+  const callServiceRef = useRef<WebRTCCallService>(new WebRTCCallService());
+  const [activeCallSession, setActiveCallSession] = useState<CallSession | null>(null);
+  const [isIncomingCall, setIsIncomingCall] = useState(false);
+
+  useEffect(() => {
+    if (!user?.uid) return;
+    const unsubCall = subscribeToIncomingCalls(user.uid, (call) => {
+      setActiveCallSession(call);
+      setIsIncomingCall(true);
+    });
+    return unsubCall;
+  }, [user?.uid]);
 
   
   useEffect(() => {
@@ -256,34 +286,7 @@ export default function App() {
     localStorage.removeItem('soundlink_user');
   };
 
-  const activateDeveloperSession = async () => {
-    const devUser = {
-      uid: 'dev_usae4544_root',
-      name: 'Developer (Root)',
-      email: DEVELOPER_EMAIL,
-      picture: 'https://api.dicebear.com/7.x/bottts/svg?seed=usae4544',
-    };
-    setUser(devUser);
-    localStorage.setItem('soundlink_user', JSON.stringify(devUser));
-    
-    const devProfile = {
-      uid: devUser.uid,
-      email: devUser.email,
-      displayName: 'Developer',
-      username: 'developer',
-      role: 'developer',
-      isDeveloper: true,
-      createdAt: Date.now()
-    };
-    setUserProfile(devProfile);
-    try {
-      await setDoc(doc(db, 'users', devUser.uid), devProfile, { merge: true });
-    } catch (e) {
-      console.warn("Could not save to firestore", e);
-    }
-  };
 
-  
 
   // Transmit State
   const [sendMode, setSendMode] = useState<'text' | 'image' | 'video' | 'audio'>('image'); // Default to image
@@ -609,22 +612,7 @@ export default function App() {
 
       storeAudioLocally(token, dataUrl, meta, file!);
       setIsPreparingMedia(false);
-
-      // Auto publish share link for audio
-      publishSharePayload({
-        type: 'audio',
-        token,
-        dataUrl,
-        meta,
-        expiresIn: broadcastExpiryMs > 0 ? broadcastExpiryMs : undefined,
-        senderName: userProfile?.username || user?.displayName || 'SoundLink User',
-      })
-        .then(({ shareUrl }) => {
-          setGeneratedShareUrl(shareUrl);
-          setLastSharedToken(token);
-        })
-        .catch(console.error);
-    }, 50);
+    }, 10);
   };
 
   // Handle Real Video Upload
@@ -663,22 +651,7 @@ export default function App() {
 
       storeVideoLocally(token, dataUrl, meta, file!);
       setIsPreparingMedia(false);
-
-      // Auto publish share link for video
-      publishSharePayload({
-        type: 'video',
-        token,
-        dataUrl,
-        meta,
-        expiresIn: broadcastExpiryMs > 0 ? broadcastExpiryMs : undefined,
-        senderName: userProfile?.username || user?.displayName || 'SoundLink User',
-      })
-        .then(({ shareUrl }) => {
-          setGeneratedShareUrl(shareUrl);
-          setLastSharedToken(token);
-        })
-        .catch(console.error);
-    }, 50);
+    }, 10);
   };
 
   // Handle Real Photo Upload (Preserving full original photo!)
@@ -724,25 +697,13 @@ export default function App() {
           storeImageLocally(token, dataUrl, meta, file!);
           setIsPreparingMedia(false);
 
-          // Auto publish share link for photo
-          publishSharePayload({
-            type: 'image',
-            token,
-            dataUrl,
-            meta,
-            expiresIn: broadcastExpiryMs > 0 ? broadcastExpiryMs : undefined,
-            senderName: userProfile?.username || user?.displayName || 'SoundLink User',
-          })
-            .then(({ shareUrl }) => {
-              setGeneratedShareUrl(shareUrl);
-              setLastSharedToken(token);
-            })
-            .catch(console.error);
+          storeImageLocally(token, dataUrl, meta, file!);
+          setIsPreparingMedia(false);
         };
         img.src = dataUrl;
       };
       reader.readAsDataURL(file!);
-    }, 50);
+    }, 10);
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -921,11 +882,7 @@ export default function App() {
               try {
                 const res = await fetch(finalDataUrl);
                 const blob = await res.blob();
-                const formData = new FormData();
-                formData.append('file', blob, payloadMeta?.name || 'media.bin');
-                const upRes = await fetch('/api/upload', { method: 'POST', body: formData });
-                const upData = await upRes.json();
-                if (upData.url) finalDataUrl = upData.url;
+                finalDataUrl = await uploadBlobMedia(blob, payloadMeta?.name || 'media.bin');
               } catch (e) { console.error('Upload failed', e); }
             }
             fetch('/api/upload-payload', {
@@ -1007,11 +964,7 @@ export default function App() {
               try {
                 const res = await fetch(finalDataUrl);
                 const blob = await res.blob();
-                const formData = new FormData();
-                formData.append('file', blob, payloadMeta?.name || 'media.bin');
-                const upRes = await fetch('/api/upload', { method: 'POST', body: formData });
-                const upData = await upRes.json();
-                if (upData.url) finalDataUrl = upData.url;
+                finalDataUrl = await uploadBlobMedia(blob, payloadMeta?.name || 'media.bin');
               } catch (e) { console.error('Upload failed', e); }
             }
             fetch('/api/upload-payload', {
@@ -1308,14 +1261,16 @@ export default function App() {
             )}
             
             {/* Direct Developer Panel Button for instant full access across all devices */}
-            <button
-              onClick={() => setShowDevPanel(true)}
-              className="px-2 sm:px-2.5 py-1.5 rounded-xl bg-gradient-to-r from-amber-500/20 to-yellow-500/20 hover:from-amber-500/30 hover:to-yellow-500/30 border border-amber-500/40 text-amber-300 text-xs font-bold flex items-center gap-1.5 transition-all shadow-md active:scale-95 shrink-0"
-              title="Open Developer Control Panel"
-            >
-              <Crown className="w-3.5 h-3.5 text-amber-400" />
-              <span className="whitespace-nowrap">Developer</span>
-            </button>
+            {isDeveloperUser(user?.email) && (
+              <button
+                onClick={() => setShowDevPanel(true)}
+                className="px-2 sm:px-2.5 py-1.5 rounded-xl bg-gradient-to-r from-amber-500/20 to-yellow-500/20 hover:from-amber-500/30 hover:to-yellow-500/30 border border-amber-500/40 text-amber-300 text-xs font-bold flex items-center gap-1.5 transition-all shadow-md active:scale-95 shrink-0"
+                title="Open Developer Control Panel"
+              >
+                <Crown className="w-3.5 h-3.5 text-amber-400" />
+                <span className="whitespace-nowrap">Developer</span>
+              </button>
+            )}
             
             <button
               onClick={() => setShowStorageManager(true)}
@@ -2306,11 +2261,24 @@ export default function App() {
       )}
 
       {/* Developer Master Panel Modal */}
-      {showDevPanel && (
+      {showDevPanel && isDeveloperUser(user?.email) && (
         <DeveloperPanel 
           onClose={() => setShowDevPanel(false)} 
           currentUser={user}
-          onActivateDeveloper={activateDeveloperSession}
+        />
+      )}
+
+      {/* Global Active or Incoming Call Modal */}
+      {activeCallSession && (
+        <CallModal
+          callSession={activeCallSession}
+          callService={callServiceRef.current}
+          isIncoming={isIncomingCall}
+          currentUser={user}
+          onClose={() => {
+            setActiveCallSession(null);
+            setIsIncomingCall(false);
+          }}
         />
       )}
 

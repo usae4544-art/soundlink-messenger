@@ -21,20 +21,35 @@ export interface PublishShareParams {
 }
 
 /**
- * Uploads a blob/file to the server so it can be accessed across any device/browser
+ * Uploads a blob or file to the server using robust chunking to support long/large videos (100MB+) without timeouts or limits
  */
 export async function uploadBlobMedia(blob: Blob, filename: string): Promise<string> {
-  const formData = new FormData();
-  formData.append('file', blob, filename);
-  const response = await fetch('/api/upload', {
-    method: 'POST',
-    body: formData,
-  });
-  if (!response.ok) {
-    throw new Error(`Upload failed with status ${response.status}`);
+  const file = blob instanceof File ? blob : new File([blob], filename, { type: blob.type });
+  const chunkSize = 512 * 1024; // 512KB chunks
+  const totalChunks = Math.ceil(file.size / chunkSize);
+  const uploadId = Date.now().toString() + Math.random().toString(36).substring(7);
+  
+  let finalUrl = '';
+  
+  for (let i = 0; i < totalChunks; i++) {
+    const start = i * chunkSize;
+    const end = Math.min(start + chunkSize, file.size);
+    const chunk = file.slice(start, end);
+    
+    const formData = new FormData();
+    formData.append('chunk', chunk, 'chunk');
+    formData.append('originalName', file.name);
+    formData.append('chunkIndex', i.toString());
+    formData.append('totalChunks', totalChunks.toString());
+    formData.append('uploadId', uploadId);
+    
+    const res = await fetch('/api/upload-chunk', { method: 'POST', body: formData });
+    if (!res.ok) throw new Error('Upload failed with status ' + res.status);
+    const data = await res.json();
+    if (data.url) finalUrl = data.url;
   }
-  const data = await response.json();
-  return data.url; // e.g. /uploads/12345-file.png
+  
+  return finalUrl;
 }
 
 /**
@@ -48,10 +63,15 @@ export async function publishSharePayload(params: PublishShareParams): Promise<{
   // If dataUrl is a local blob URL, upload it to the server so other users can load it via link
   if (finalDataUrl.startsWith('blob:')) {
     try {
-      const blobRes = await fetch(finalDataUrl);
-      const blob = await blobRes.blob();
+      const localVid = type === 'video' ? retrieveVideoLocally(token) : null;
       const filename = meta?.name || `soundlink_${type}_${token}.${type === 'video' ? 'mp4' : type === 'audio' ? 'mp3' : 'png'}`;
-      finalDataUrl = await uploadBlobMedia(blob, filename);
+      if (localVid?.file) {
+        finalDataUrl = await uploadBlobMedia(localVid.file, filename);
+      } else {
+        const blobRes = await fetch(finalDataUrl);
+        const blob = await blobRes.blob();
+        finalDataUrl = await uploadBlobMedia(blob, filename);
+      }
     } catch (e) {
       console.warn('Could not upload blob to server storage, using original URL fallback:', e);
     }

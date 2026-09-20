@@ -59,8 +59,8 @@ export function ChatView({
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const isOtherDeveloper = isDeveloperUser(otherUser?.email) || otherUser?.role === 'developer' || otherUser?.isDeveloper === true;
-  const isCurrentDeveloper = isDeveloperUser(currentUser?.email) || currentUser?.role === 'developer' || currentUser?.isDeveloper === true;
+  const isOtherDeveloper = isDeveloperUser(otherUser?.email);
+  const isCurrentDeveloper = isDeveloperUser(currentUser?.email);
   const isUserSuspended = !!currentUser?.suspended;
 
   // Listen to chat document to sync theme in real-time for both participants
