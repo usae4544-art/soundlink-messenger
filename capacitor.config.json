@@ -1,0 +1,6 @@
+{
+  "appId": "com.soundlink.app",
+  "appName": "SoundLink",
+  "webDir": "dist",
+  "bundledWebRuntime": false
+}

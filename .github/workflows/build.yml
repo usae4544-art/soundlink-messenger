@@ -34,7 +34,6 @@ jobs:
     - name: 2. Configure Capacitor and Prepare Android Platform
       run: |
         npm install @capacitor/core @capacitor/cli @capacitor/android
-        npx cap init "SoundLink" "com.soundlink.app" --web-dir dist --yes || true
         npx cap add android || true
         npx cap sync android
 
@@ -55,6 +54,7 @@ jobs:
           android/app/build/outputs/apk/debug/app-debug.apk
           dist/
         if-no-files-found: error
+
 
 
 
