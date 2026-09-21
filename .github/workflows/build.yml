@@ -24,3 +24,14 @@ jobs:
 
     - name: Build application
       run: npm run build
+
+    - name: Upload Build Artifacts & APKs
+      uses: actions/upload-artifact@v4
+      with:
+        name: app-build-artifacts
+        path: |
+          dist/
+          *.apk
+          android/app/build/outputs/apk/
+        if-no-files-found: ignore
+
