@@ -84,9 +84,9 @@ export default function App() {
             if (docSnap.exists()) {
               const data = docSnap.data();
               setUserProfile(data);
-              if (!data.username) setShowProfileSetup(true);
+              if (!data.username && !localStorage.getItem('profile_setup_dismissed_' + u.uid)) setShowProfileSetup(true);
             } else {
-              setShowProfileSetup(true);
+              if (!localStorage.getItem('profile_setup_dismissed_' + u.uid)) setShowProfileSetup(true);
             }
           })
           .catch(err => console.warn("Initial user fetch:", err));
@@ -127,7 +127,7 @@ export default function App() {
               data.isDeveloper = false;
             }
             setUserProfile(data);
-            if (!data.username) setShowProfileSetup(true);
+            if (!data.username && !localStorage.getItem('profile_setup_dismissed_' + u.uid)) setShowProfileSetup(true);
           } else {
             const newProfile: any = {
               uid: u.uid,
@@ -147,7 +147,7 @@ export default function App() {
             }
             await setDoc(userRef, newProfile);
             setUserProfile(newProfile);
-            setShowProfileSetup(true);
+            if (!localStorage.getItem('profile_setup_dismissed_' + u.uid)) setShowProfileSetup(true);
           }
         } catch (e) {
           console.warn("User auth state profile sync error:", e);
@@ -190,17 +190,23 @@ export default function App() {
     const subscribePush = async () => {
       try {
         if ('serviceWorker' in navigator && 'PushManager' in window) {
+          await navigator.serviceWorker.register('/sw.js');
           const reg = await navigator.serviceWorker.ready;
           const res = await fetch('/api/vapid-public-key');
           const vapidPublicKey = await res.text();
           const convertedVapidKey = urlBase64ToUint8Array(vapidPublicKey);
+
+          const existingSub = await reg.pushManager.getSubscription();
+          if (existingSub) {
+            await existingSub.unsubscribe();
+          }
 
           const subscription = await reg.pushManager.subscribe({
             userVisibleOnly: true,
             applicationServerKey: convertedVapidKey
           });
 
-          await setDoc(doc(db, 'users', user.uid), { pushSubscription: subscription }, { merge: true });
+          await setDoc(doc(db, 'users', user.uid), { pushSubscription: subscription.toJSON() }, { merge: true });
           console.log("Subscribed to Web Push");
         }
       } catch (err) {
@@ -232,47 +238,53 @@ export default function App() {
     }
   }, [activeTab]);
 
+  const processLoggedInUser = async (fbUser: any) => {
+    const u = {
+      uid: fbUser.uid,
+      name: fbUser.displayName,
+      email: fbUser.email,
+      picture: fbUser.photoURL,
+    };
+    setUser(u);
+    localStorage.setItem('soundlink_user', JSON.stringify(u));
+    
+    const isDev = isDeveloperUser(fbUser.email);
+    const userRef = doc(db, 'users', fbUser.uid);
+    const userDoc = await getDoc(userRef);
+    
+    if (userDoc.exists()) {
+      const data = userDoc.data();
+      if (isDev && data.role !== 'developer') {
+        await setDoc(userRef, { role: 'developer', isDeveloper: true }, { merge: true });
+        data.role = 'developer';
+        data.isDeveloper = true;
+      }
+      setUserProfile(data);
+      if (!data.username) setShowProfileSetup(true);
+    } else {
+      const newProfile: any = { 
+        uid: u.uid,
+        email: u.email,
+        displayName: u.name,
+        photoURL: u.picture,
+        createdAt: Date.now()
+      };
+      if (isDev) {
+        newProfile.role = 'developer';
+        newProfile.isDeveloper = true;
+      }
+      await setDoc(userRef, newProfile);
+      setUserProfile(newProfile);
+      setShowProfileSetup(true);
+    }
+  };
+
+
+
   const handleFirebaseLogin = async () => {
     try {
       const fbUser = await loginWithFirebase();
-      const u = {
-        uid: fbUser.uid,
-        name: fbUser.displayName,
-        email: fbUser.email,
-        picture: fbUser.photoURL,
-      };
-      setUser(u);
-      localStorage.setItem('soundlink_user', JSON.stringify(u));
-      
-      const isDev = isDeveloperUser(fbUser.email);
-      const userRef = doc(db, 'users', fbUser.uid);
-      const userDoc = await getDoc(userRef);
-      
-      if (userDoc.exists()) {
-        const data = userDoc.data();
-        if (isDev && data.role !== 'developer') {
-          await setDoc(userRef, { role: 'developer', isDeveloper: true }, { merge: true });
-          data.role = 'developer';
-          data.isDeveloper = true;
-        }
-        setUserProfile(data);
-        if (!data.username) setShowProfileSetup(true);
-      } else {
-        const newProfile: any = { 
-          uid: u.uid,
-          email: u.email,
-          displayName: u.name,
-          photoURL: u.picture,
-          createdAt: Date.now()
-        };
-        if (isDev) {
-          newProfile.role = 'developer';
-          newProfile.isDeveloper = true;
-        }
-        await setDoc(userRef, newProfile);
-        setUserProfile(newProfile);
-        setShowProfileSetup(true);
-      }
+      await processLoggedInUser(fbUser);
     } catch (error) {
       console.error("Error signing in", error);
     }
@@ -304,7 +316,6 @@ export default function App() {
   const [audioAcousticToken, setAudioAcousticToken] = useState<string>('');
   
   const [isSending, setIsSending] = useState(false);
-  const [isPreparingMedia, setIsPreparingMedia] = useState(false);
   const [sendProgress, setSendProgress] = useState(0);
   const [isDictating, setIsDictating] = useState(false);
   const [broadcastExpiryMs, setBroadcastExpiryMs] = useState<number>(0);
@@ -576,7 +587,7 @@ export default function App() {
     }
   };
 
-  // Handle Real Audio Upload
+  // Handle Real Audio Upload (Instant)
   const handleRealAudioUpload = (e: React.ChangeEvent<HTMLInputElement> | DragEvent | File) => {
     let file: File | undefined;
     if (e instanceof File) {
@@ -589,33 +600,27 @@ export default function App() {
 
     if (!file) return;
 
-    setIsPreparingMedia(true);
     setRealImageDataUrl(null);
     setRealVideoDataUrl(null);
     
-    // Use timeout to let UI update and show loader
-    setTimeout(() => {
-      // Use URL.createObjectURL for instant local access without crashing browser with huge base64 strings
-      const dataUrl = URL.createObjectURL(file!);
-      const meta: AudioMetadata = {
-        name: file!.name,
-        size: file!.size,
-        mimeType: file!.type || 'audio/mp3',
-      };
+    const dataUrl = URL.createObjectURL(file);
+    const meta: AudioMetadata = {
+      name: file.name,
+      size: file.size,
+      mimeType: file.type || 'audio/mp3',
+    };
 
-      const encoder = new TextEncoder();
-      const token = generateTokenFromBytes(encoder.encode(file!.name + file!.size + Date.now() + "aud"));
+    const encoder = new TextEncoder();
+    const token = generateTokenFromBytes(encoder.encode(file.name + file.size + Date.now() + "aud"));
 
-      setRealAudioDataUrl(dataUrl);
-      setRealAudioMeta(meta);
-      setAudioAcousticToken(token);
+    setRealAudioDataUrl(dataUrl);
+    setRealAudioMeta(meta);
+    setAudioAcousticToken(token);
 
-      storeAudioLocally(token, dataUrl, meta, file!);
-      setIsPreparingMedia(false);
-    }, 10);
+    storeAudioLocally(token, dataUrl, meta, file);
   };
 
-  // Handle Real Video Upload
+  // Handle Real Video Upload (Instant)
   const handleRealVideoUpload = (e: React.ChangeEvent<HTMLInputElement> | DragEvent | File) => {
     let file: File | undefined;
     if (e instanceof File) {
@@ -628,33 +633,27 @@ export default function App() {
 
     if (!file) return;
 
-    setIsPreparingMedia(true);
     setRealImageDataUrl(null);
     setRealAudioDataUrl(null);
 
-    // Use timeout to let UI render the loader before blocking the thread with base64 conversion
-    setTimeout(() => {
-      // Create a blob URL instead of base64 to allow huge 500MB+ video files instantly!
-      const dataUrl = URL.createObjectURL(file!);
-      const meta: VideoMetadata = {
-        name: file!.name,
-        size: file!.size,
-        mimeType: file!.type || 'video/mp4',
-      };
+    const dataUrl = URL.createObjectURL(file);
+    const meta: VideoMetadata = {
+      name: file.name,
+      size: file.size,
+      mimeType: file.type || 'video/mp4',
+    };
 
-      const encoder = new TextEncoder();
-      const token = generateTokenFromBytes(encoder.encode(file!.name + file!.size + Date.now() + "vid"));
+    const encoder = new TextEncoder();
+    const token = generateTokenFromBytes(encoder.encode(file.name + file.size + Date.now() + "vid"));
 
-      setRealVideoDataUrl(dataUrl);
-      setRealVideoMeta(meta);
-      setVideoAcousticToken(token);
+    setRealVideoDataUrl(dataUrl);
+    setRealVideoMeta(meta);
+    setVideoAcousticToken(token);
 
-      storeVideoLocally(token, dataUrl, meta, file!);
-      setIsPreparingMedia(false);
-    }, 10);
+    storeVideoLocally(token, dataUrl, meta, file);
   };
 
-  // Handle Real Photo Upload (Preserving full original photo!)
+  // Handle Real Photo Upload (Instant)
   const handleRealPhotoUpload = (e: React.ChangeEvent<HTMLInputElement> | DragEvent | File) => {
     let file: File | undefined;
     if (e instanceof File) {
@@ -667,43 +666,26 @@ export default function App() {
 
     if (!file) return;
 
-    setIsPreparingMedia(true);
     setRealVideoDataUrl(null);
     setRealAudioDataUrl(null);
 
-    setTimeout(() => {
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        const dataUrl = ev.target?.result as string;
-        const img = new Image();
-        img.onload = () => {
-          const meta: ImageMetadata = {
-            name: file!.name,
-            size: file!.size,
-            width: img.naturalWidth || img.width,
-            height: img.naturalHeight || img.height,
-            mimeType: file!.type || 'image/png',
-          };
+    const dataUrl = URL.createObjectURL(file);
+    const meta: ImageMetadata = {
+      name: file.name,
+      size: file.size,
+      width: 800,
+      height: 800,
+      mimeType: file.type || 'image/png',
+    };
 
-          // Generate acoustic token from image header bytes
-          const encoder = new TextEncoder();
-          const token = generateTokenFromBytes(encoder.encode(file!.name + file!.size + Date.now()));
+    const encoder = new TextEncoder();
+    const token = generateTokenFromBytes(encoder.encode(file.name + file.size + Date.now()));
 
-          setRealImageDataUrl(dataUrl);
-          setRealImageMeta(meta);
-          setImageAcousticToken(token);
+    setRealImageDataUrl(dataUrl);
+    setRealImageMeta(meta);
+    setImageAcousticToken(token);
 
-          // Register in local acoustic memory store
-          storeImageLocally(token, dataUrl, meta, file!);
-          setIsPreparingMedia(false);
-
-          storeImageLocally(token, dataUrl, meta, file!);
-          setIsPreparingMedia(false);
-        };
-        img.src = dataUrl;
-      };
-      reader.readAsDataURL(file!);
-    }, 10);
+    storeImageLocally(token, dataUrl, meta, file);
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -1329,7 +1311,10 @@ export default function App() {
             user={user} 
             existingProfile={userProfile} 
             onComplete={(updatedProfile) => { if (updatedProfile) setUserProfile({...userProfile, ...updatedProfile}); setShowProfileSetup(false); }} 
-            onClose={userProfile?.username ? () => setShowProfileSetup(false) : undefined}
+            onClose={() => {
+              localStorage.setItem('profile_setup_dismissed_' + user.uid, 'true');
+              setShowProfileSetup(false);
+            }}
           />
         )}
         
@@ -1419,15 +1404,7 @@ export default function App() {
                     )}
                   </div>
 
-                  {isPreparingMedia ? (
-                    <div className="w-full h-56 bg-zinc-950/70 border-2 border-zinc-700/80 rounded-2xl flex flex-col items-center justify-center gap-4">
-                      <RefreshCw className="w-8 h-8 text-emerald-400 animate-spin" />
-                      <div className="text-center">
-                        <p className="text-sm font-semibold text-emerald-400">Preparing your selected media...</p>
-                        <p className="text-xs text-zinc-400 mt-1">This might take a few seconds for large files</p>
-                      </div>
-                    </div>
-                  ) : realImageDataUrl ? (
+                  {realImageDataUrl ? (
                     <AudioReactiveImage
                       src={realImageDataUrl}
                       metadata={realImageMeta || undefined}
@@ -1495,15 +1472,7 @@ export default function App() {
                     )}
                   </div>
 
-                  {isPreparingMedia ? (
-                    <div className="w-full h-56 bg-zinc-950/70 border-2 border-zinc-700/80 rounded-2xl flex flex-col items-center justify-center gap-4">
-                      <RefreshCw className="w-8 h-8 text-emerald-400 animate-spin" />
-                      <div className="text-center">
-                        <p className="text-sm font-semibold text-emerald-400">Preparing your selected media...</p>
-                        <p className="text-xs text-zinc-400 mt-1">This might take a few seconds for large files</p>
-                      </div>
-                    </div>
-                  ) : realVideoDataUrl ? (
+                  {realVideoDataUrl ? (
                     <div className="relative w-full rounded-2xl overflow-hidden border-2 border-emerald-500/30 bg-zinc-950 flex flex-col">
                       <video 
                         src={realVideoDataUrl} 
@@ -1578,15 +1547,7 @@ export default function App() {
                     )}
                   </div>
 
-                  {isPreparingMedia ? (
-                    <div className="w-full h-56 bg-zinc-950/70 border-2 border-zinc-700/80 rounded-2xl flex flex-col items-center justify-center gap-4">
-                      <RefreshCw className="w-8 h-8 text-emerald-400 animate-spin" />
-                      <div className="text-center">
-                        <p className="text-sm font-semibold text-emerald-400">Preparing your selected media...</p>
-                        <p className="text-xs text-zinc-400 mt-1">This might take a few seconds for large files</p>
-                      </div>
-                    </div>
-                  ) : realAudioDataUrl ? (
+                  {realAudioDataUrl ? (
                     <div className="relative w-full rounded-2xl overflow-hidden border-2 border-emerald-500/30 bg-zinc-950 flex flex-col p-6 items-center gap-4">
                       <div className="w-16 h-16 bg-emerald-500/10 rounded-full flex items-center justify-center animate-pulse">
                         <Music className="w-8 h-8 text-emerald-400" />

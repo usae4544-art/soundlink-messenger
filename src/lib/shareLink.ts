@@ -25,7 +25,23 @@ export interface PublishShareParams {
  */
 export async function uploadBlobMedia(blob: Blob, filename: string): Promise<string> {
   const file = blob instanceof File ? blob : new File([blob], filename, { type: blob.type });
-  const chunkSize = 512 * 1024; // 512KB chunks
+  
+  // If file is under 50MB, upload instantly via single request /api/upload
+  if (file.size < 50 * 1024 * 1024) {
+    try {
+      const formData = new FormData();
+      formData.append('file', file, filename);
+      const res = await fetch('/api/upload', { method: 'POST', body: formData });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.url) return data.url;
+      }
+    } catch (e) {
+      console.warn("Single upload failed, falling back to fast chunking:", e);
+    }
+  }
+
+  const chunkSize = 1024 * 1024; // 1MB chunks for faster upload
   const totalChunks = Math.ceil(file.size / chunkSize);
   const uploadId = Date.now().toString() + Math.random().toString(36).substring(7);
   

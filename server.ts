@@ -4,12 +4,22 @@ import multer from 'multer';
 import fs from 'fs';
 import cors from 'cors';
 import webpush from 'web-push';
+import * as OneSignal from 'onesignal-node';
 import { createServer as createViteServer } from 'vite';
 
 const app = express();
 const PORT = 3000;
 app.use(cors());
 app.use(express.json({ limit: '200mb' }));
+
+let oneSignalClient: OneSignal.Client | null = null;
+if (process.env.ONESIGNAL_APP_ID && process.env.ONESIGNAL_API_KEY) {
+  oneSignalClient = new OneSignal.Client(
+    process.env.ONESIGNAL_APP_ID,
+    process.env.ONESIGNAL_API_KEY
+  );
+}
+
 
 const uploadsDir = path.join(process.cwd(), 'uploads');
 if (!fs.existsSync(uploadsDir)) {
@@ -52,7 +62,25 @@ app.get('/api/vapid-public-key', (req, res) => {
 
 // We no longer save subscriptions on the server, we just use this endpoint to TRIGGER a push
 app.post('/api/send-push', async (req, res) => {
-  const { subscription, title, body, icon, url } = req.body;
+  const { subscription, title, body, icon, url, userId } = req.body;
+  
+  // Try OneSignal if client is configured
+  if (oneSignalClient) {
+    try {
+      const notification: any = {
+        contents: { en: body || 'New message' },
+        headings: { en: title || 'SoundLink App' },
+        included_segments: userId ? undefined : ['All'],
+        include_external_user_ids: userId ? [userId] : undefined,
+        url: url || '/'
+      };
+      await oneSignalClient.createNotification(notification);
+    } catch (e) {
+      console.error("OneSignal push failed:", e);
+    }
+  }
+
+  // Fallback / standard WebPush
   if (subscription) {
     const payload = JSON.stringify({ title, body, icon, url });
     try {

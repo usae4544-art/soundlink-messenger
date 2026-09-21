@@ -850,6 +850,8 @@ export class WebRTCCallService {
 }
 
 // Global active call listener for incoming calls
+const processedCalls = new Set<string>();
+
 export function subscribeToIncomingCalls(userUid: string, onIncoming: (call: CallSession) => void) {
   const q = query(
     collection(db, 'calls'),
@@ -858,11 +860,12 @@ export function subscribeToIncomingCalls(userUid: string, onIncoming: (call: Cal
   );
 
   return onSnapshot(q, (snap) => {
-    snap.docChanges().forEach((change) => {
-      if (change.type === 'added') {
-        const callData = change.doc.data() as CallSession;
-        // Ignore calls older than 60 seconds
-        if (Date.now() - callData.createdAt < 60000) {
+    snap.docs.forEach((docSnap) => {
+      const callData = docSnap.data() as CallSession;
+      if (callData && callData.id && !processedCalls.has(callData.id)) {
+        // Allow up to 2 minutes old calls (and tolerate slight clock skews)
+        if (Date.now() - callData.createdAt < 120000) {
+          processedCalls.add(callData.id);
           playRingtone();
           triggerIncomingCallAlert(callData.caller.name, callData.type, callData.caller.photoURL);
           onIncoming(callData);
