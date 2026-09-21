@@ -1,4 +1,4 @@
-name: Build and Verify
+name: Build Android APK and Web App
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
     branches: [ "main", "master" ]
 
 jobs:
-  build:
+  build-android-apk:
     runs-on: ubuntu-latest
 
     steps:
@@ -25,33 +25,37 @@ jobs:
         distribution: 'temurin'
         java-version: '17'
 
-    - name: Install dependencies
+    - name: Install Node Dependencies
       run: npm install
 
-    - name: Build web application
+    - name: Build Web Application (Vite Dist)
       run: npm run build
 
-    - name: Install Capacitor & Android platform
+    - name: Install Capacitor Core, CLI & Android Platform
       run: |
         npm install @capacitor/core @capacitor/cli @capacitor/android
-        npx cap init SoundLink com.soundlink.app --web-dir dist --yes || true
+        npx cap init "SoundLink" "com.soundlink.app" --web-dir dist --yes || true
         npx cap add android || true
         npx cap sync android
 
-    - name: Build Android Debug APK with Gradle
+    - name: Accept Android SDK Licenses & Build APK
       run: |
+        export ANDROID_HOME=$ANDROID_SDK_ROOT
+        echo "sdk.dir=$ANDROID_SDK_ROOT" > android/local.properties
+        
         cd android
         chmod +x gradlew
-        ./gradlew assembleDebug
+        ./gradlew assembleDebug --warning-mode all
 
-    - name: Upload Build Artifacts & APK
+    - name: Upload Android APK & Build Artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: android-apk-artifact
+        name: soundlink-android-apk
         path: |
-          dist/
           android/app/build/outputs/apk/debug/app-debug.apk
+          dist/
           *.apk
-        if-no-files-found: ignore
+        if-no-files-found: error
+
 
 
