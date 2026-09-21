@@ -37,6 +37,9 @@ jobs:
         npx cap add android || true
         npx cap sync android
 
+    - name: 2.5 Align Kotlin Versions & Resolution Strategy
+      run: node patch-gradle.js
+
     - name: 3. Build APK using Gradle
       run: |
         export ANDROID_HOME=$ANDROID_SDK_ROOT
