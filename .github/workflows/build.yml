@@ -28,34 +28,34 @@ jobs:
     - name: Install Node Dependencies
       run: npm install
 
-    - name: Build Web Application (Vite Dist)
+    - name: 1. Run Web Build First
       run: npm run build
 
-    - name: Install Capacitor Core, CLI & Android Platform
+    - name: 2. Configure Capacitor and Prepare Android Platform
       run: |
         npm install @capacitor/core @capacitor/cli @capacitor/android
         npx cap init "SoundLink" "com.soundlink.app" --web-dir dist --yes || true
         npx cap add android || true
         npx cap sync android
 
-    - name: Accept Android SDK Licenses & Build APK
+    - name: 3. Build APK using Gradle
       run: |
         export ANDROID_HOME=$ANDROID_SDK_ROOT
         echo "sdk.dir=$ANDROID_SDK_ROOT" > android/local.properties
         
         cd android
         chmod +x gradlew
-        ./gradlew assembleDebug --warning-mode all
+        ./gradlew assembleDebug
 
-    - name: Upload Android APK & Build Artifacts
+    - name: 4. Upload APK as Artifact
       uses: actions/upload-artifact@v4
       with:
         name: soundlink-android-apk
         path: |
           android/app/build/outputs/apk/debug/app-debug.apk
           dist/
-          *.apk
         if-no-files-found: error
+
 
 
 
