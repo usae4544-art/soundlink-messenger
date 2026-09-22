@@ -5,15 +5,15 @@ import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-console.log("Patching Android Gradle files for Kotlin version alignment and conflict resolution...");
+console.log("Patching Android Gradle files for Kotlin version alignment (2.0.21) and conflict resolution...");
 
 const gradlePropsPath = path.join('android', 'gradle.properties');
 if (fs.existsSync(gradlePropsPath)) {
   let props = fs.readFileSync(gradlePropsPath, 'utf8');
   if (!props.includes('kotlinVersion')) {
-    props += '\nkotlinVersion=1.9.24\n';
+    props += '\nkotlinVersion=2.0.21\n';
   } else {
-    props = props.replace(/kotlinVersion=.*/g, 'kotlinVersion=1.9.24');
+    props = props.replace(/kotlinVersion=.*/g, 'kotlinVersion=2.0.21');
   }
   fs.writeFileSync(gradlePropsPath, props);
 }
@@ -26,14 +26,14 @@ if (fs.existsSync(rootGradlePath)) {
 allprojects {
     configurations.all {
         resolutionStrategy {
-            force 'org.jetbrains.kotlin:kotlin-stdlib:1.9.24'
-            force 'org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.9.24'
-            force 'org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.9.24'
-            force 'org.jetbrains.kotlin:kotlin-reflect:1.9.24'
+            force 'org.jetbrains.kotlin:kotlin-stdlib:2.0.21'
+            force 'org.jetbrains.kotlin:kotlin-stdlib-jdk7:2.0.21'
+            force 'org.jetbrains.kotlin:kotlin-stdlib-jdk8:2.0.21'
+            force 'org.jetbrains.kotlin:kotlin-reflect:2.0.21'
             
             eachDependency { details ->
                 if (details.requested.group == 'org.jetbrains.kotlin') {
-                    details.useVersion '1.9.24'
+                    details.useVersion '2.0.21'
                 }
             }
         }
@@ -45,4 +45,4 @@ allprojects {
   }
 }
 
-console.log("Gradle patching completed successfully.");
+console.log("Gradle patching completed successfully for Kotlin 2.0.21.");

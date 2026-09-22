@@ -47,6 +47,7 @@ jobs:
         
         cd android
         chmod +x gradlew
+        ./gradlew clean
         ./gradlew assembleDebug
 
     - name: 4. Upload APK as Artifact
