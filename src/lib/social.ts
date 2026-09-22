@@ -1,5 +1,7 @@
 import { db } from '../firebase';
 import { collection, doc, getDoc, setDoc, query, where, getDocs, updateDoc, onSnapshot, addDoc, orderBy } from 'firebase/firestore';
+import { LocalNotifications } from '@capacitor/local-notifications';
+
 
 export const checkUsernameUnique = async (username: string) => {
   if (!username) return false;
@@ -143,6 +145,21 @@ export const sendMessage = async (chatId: string, senderId: string, text: string
       const targetUser = await getDoc(doc(db, 'users', targetUid));
       const senderUser = await getDoc(doc(db, 'users', senderId));
       if (targetUser.exists() && senderUser.exists()) {
+        const senderName = senderUser.data().displayName || 'Someone';
+        try {
+          LocalNotifications.schedule({
+            notifications: [
+              {
+                title: `💬 New message from ${senderName}`,
+                body: lastMessageText,
+                id: Math.floor(Date.now() % 100000),
+                schedule: { at: new Date(Date.now() + 50) },
+                channelId: 'soundlink_calls',
+              }
+            ]
+          }).catch(() => {});
+        } catch (e) {}
+
         const tData = targetUser.data();
         if (tData.pushSubscription) {
           await fetch('/api/send-push', {
@@ -150,7 +167,7 @@ export const sendMessage = async (chatId: string, senderId: string, text: string
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               subscription: tData.pushSubscription,
-              title: `New message from ${senderUser.data().displayName || 'Someone'}`,
+              title: `New message from ${senderName}`,
               body: lastMessageText,
               icon: senderUser.data().photoURL || '/icon.svg',
               url: '/'
