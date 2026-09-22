@@ -21,6 +21,7 @@ if (fs.existsSync(gradlePropsPath)) {
 const rootGradlePath = path.join('android', 'build.gradle');
 if (fs.existsSync(rootGradlePath)) {
   let content = fs.readFileSync(rootGradlePath, 'utf8');
+  content = content.replace(/1\.9\.24/g, '2.0.21');
   if (!content.includes('resolutionStrategy')) {
     const resolutionBlock = `
 allprojects {
@@ -41,8 +42,8 @@ allprojects {
 }
 `;
     content += resolutionBlock;
-    fs.writeFileSync(rootGradlePath, content);
   }
+  fs.writeFileSync(rootGradlePath, content);
 }
 
 console.log("Gradle patching completed successfully for Kotlin 2.0.21.");
