@@ -19,7 +19,7 @@ export function ProfileSetup({ user, onComplete, existingProfile, onClose }: Pro
   const [previewUrl, setPreviewUrl] = useState(existingProfile?.photoURL || user?.picture || '');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const isDev = isDeveloperUser(user?.email);
+  const isDev = isDeveloperUser(user?.email, user?.username || username || existingProfile?.username);
 
   const handlePhotoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {

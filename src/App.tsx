@@ -1,8 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
 
-import { auth, loginWithFirebase, logoutFromFirebase, db } from './firebase';
-import { onAuthStateChanged } from 'firebase/auth';
-import { doc, getDoc, setDoc, deleteDoc } from 'firebase/firestore';
+import { db } from './firebase';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { CustomLoginModal } from './components/CustomLoginModal';
+import { CustomUser } from './lib/customAuth';
 import {
   broadcastData,
   startListening,
@@ -41,6 +42,7 @@ import {
   Crown,
   Share2,
   Link as LinkIcon,
+  KeyRound,
 } from 'lucide-react';
 import { AudioAnalysis, DecodedPayload, ImageMetadata, VideoMetadata, AudioMetadata, MotionMode, SentHistoryItem, PayloadType } from './types';
 import { ProfileSetup } from './components/social/ProfileSetup';
@@ -71,9 +73,10 @@ export default function App() {
   const [showProfileSetup, setShowProfileSetup] = useState(false);
   const [showStorageManager, setShowStorageManager] = useState(false);
   const [showDevPanel, setShowDevPanel] = useState(false);
+  const [showCustomLoginModal, setShowCustomLoginModal] = useState(false);
   
   useEffect(() => {
-    // 1. Initial fast local restore
+    // Initial fast local restore
     const savedUser = localStorage.getItem('soundlink_user');
     if (savedUser) {
       try {
@@ -84,78 +87,11 @@ export default function App() {
             if (docSnap.exists()) {
               const data = docSnap.data();
               setUserProfile(data);
-              if (!data.username && !localStorage.getItem('profile_setup_dismissed_' + u.uid)) setShowProfileSetup(true);
-            } else {
-              if (!localStorage.getItem('profile_setup_dismissed_' + u.uid)) setShowProfileSetup(true);
             }
           })
           .catch(err => console.warn("Initial user fetch:", err));
       } catch (e) {}
     }
-
-    // 2. Reliable Firebase Auth state synchronization
-    const unsubAuth = onAuthStateChanged(auth, async (fbUser) => {
-      if (fbUser) {
-        const u = {
-          uid: fbUser.uid,
-          name: fbUser.displayName || 'User',
-          email: fbUser.email,
-          picture: fbUser.photoURL || '',
-        };
-        setUser(u);
-        localStorage.setItem('soundlink_user', JSON.stringify(u));
-
-        try {
-          // Permanently clean up/delete any dummy root developer mock document if it exists
-          try {
-            await deleteDoc(doc(db, 'users', 'dev_usae4544_root'));
-          } catch (e) {}
-
-          const isDev = isDeveloperUser(fbUser.email);
-          const userRef = doc(db, 'users', fbUser.uid);
-          const userDoc = await getDoc(userRef);
-          if (userDoc.exists()) {
-            const data = userDoc.data();
-            if (isDev && data.role !== 'developer') {
-              await setDoc(userRef, { role: 'developer', isDeveloper: true }, { merge: true });
-              data.role = 'developer';
-              data.isDeveloper = true;
-            } else if (!isDev && (data.role === 'developer' || data.isDeveloper)) {
-              // Strictly restrict developer role to usae4544@gmail.com only
-              await setDoc(userRef, { role: 'user', isDeveloper: false }, { merge: true });
-              data.role = 'user';
-              data.isDeveloper = false;
-            }
-            setUserProfile(data);
-            if (!data.username && !localStorage.getItem('profile_setup_dismissed_' + u.uid)) setShowProfileSetup(true);
-          } else {
-            const newProfile: any = {
-              uid: u.uid,
-              email: u.email,
-              displayName: u.name,
-              photoURL: u.picture,
-              username: '',
-              searchName: '',
-              createdAt: Date.now()
-            };
-            if (isDev) {
-              newProfile.role = 'developer';
-              newProfile.isDeveloper = true;
-            } else {
-              newProfile.role = 'user';
-              newProfile.isDeveloper = false;
-            }
-            await setDoc(userRef, newProfile);
-            setUserProfile(newProfile);
-            if (!localStorage.getItem('profile_setup_dismissed_' + u.uid)) setShowProfileSetup(true);
-          }
-        } catch (e) {
-          console.warn("User auth state profile sync error:", e);
-        }
-      }
-    });
-
-    return () => unsubAuth();
   }, []);
 
   // Global incoming call subscription for real-time ring, vibrate, and notifications across all tabs
@@ -281,17 +217,37 @@ export default function App() {
 
 
 
-  const handleFirebaseLogin = async () => {
-    try {
-      const fbUser = await loginWithFirebase();
-      await processLoggedInUser(fbUser);
-    } catch (error) {
-      console.error("Error signing in", error);
+  const handleCustomLoginSuccess = async (customUser: CustomUser) => {
+    const u = {
+      uid: customUser.uid,
+      name: customUser.name,
+      email: customUser.username + '@soundlink.app',
+      picture: '',
+      username: customUser.username
+    };
+    setUser(u);
+    localStorage.setItem('soundlink_user', JSON.stringify(u));
+
+    const userRef = doc(db, 'users', customUser.uid);
+    const docSnap = await getDoc(userRef);
+    if (docSnap.exists()) {
+      setUserProfile(docSnap.data());
+    } else {
+      const newProfile = {
+        uid: customUser.uid,
+        username: customUser.username,
+        displayName: customUser.name,
+        email: customUser.username + '@soundlink.app',
+        isDeveloper: customUser.isDeveloper,
+        role: customUser.role,
+        createdAt: Date.now()
+      };
+      await setDoc(userRef, newProfile);
+      setUserProfile(newProfile);
     }
   };
 
-  const handleLogout = async () => {
-    await logoutFromFirebase();
+  const handleLogout = () => {
     setUser(null);
     setUserProfile(null);
     setSentHistory([]);
@@ -1198,7 +1154,7 @@ export default function App() {
               <div className={`flex items-center gap-1.5 sm:gap-2 px-2 sm:px-2.5 py-1 rounded-full border ${isDeveloperUser(user?.email) || userProfile?.role === 'developer' || userProfile?.isDeveloper === true ? 'bg-amber-950/40 border-amber-500/50 shadow-sm shadow-amber-500/20' : 'bg-zinc-900 border-zinc-700'}`}>
                 <div className="relative shrink-0">
                   <img 
-                    src={userProfile?.photoURL || user.picture} 
+                    src={userProfile?.photoURL || user.picture || `https://api.dicebear.com/7.x/avataaars/svg?seed=${user?.username || user?.name || 'user'}`} 
                     alt="Profile" 
                     className={`w-6 h-6 rounded-full cursor-pointer hover:opacity-80 object-cover ${isDeveloperUser(user?.email) || userProfile?.role === 'developer' || userProfile?.isDeveloper === true ? 'ring-1 ring-amber-400' : ''}`} 
                     onClick={() => setShowProfileSetup(true)}
@@ -1235,9 +1191,9 @@ export default function App() {
               </div>
             ) : (
               <div className="overflow-hidden rounded-md h-[34px] flex items-center justify-center">
-                <button onClick={handleFirebaseLogin} className="flex items-center gap-2 bg-zinc-800 text-white px-3 py-1.5 rounded-lg font-medium hover:bg-zinc-700 transition-colors border border-zinc-700 text-xs whitespace-nowrap">
-                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24"><path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
-                  Login
+                <button onClick={() => setShowCustomLoginModal(true)} className="flex items-center gap-2 bg-emerald-600 text-white px-3 py-1.5 rounded-lg font-medium hover:bg-emerald-500 transition-colors border border-emerald-500 text-xs whitespace-nowrap shadow-md">
+                  <KeyRound className="w-3.5 h-3.5" />
+                  Login / Register
                 </button>
               </div>
             )}
@@ -2273,6 +2229,13 @@ export default function App() {
             </div>
           </div>
         </div>
+      )}
+      {showCustomLoginModal && (
+        <CustomLoginModal
+          isOpen={showCustomLoginModal}
+          onClose={() => setShowCustomLoginModal(false)}
+          onLoginSuccess={handleCustomLoginSuccess}
+        />
       )}
     </div>
   );

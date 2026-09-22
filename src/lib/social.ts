@@ -60,6 +60,9 @@ export const searchUsers = async (searchTerm: string) => {
 };
 
 export const sendFriendRequest = async (fromUid: string, toUid: string) => {
+  if (fromUid === toUid) {
+    throw new Error("You cannot send a friend request to yourself.");
+  }
   const id = `${fromUid}_${toUid}`;
   await setDoc(doc(db, 'friendRequests', id), {
     id, fromUid, toUid, status: 'pending', timestamp: Date.now()
@@ -199,8 +202,10 @@ export const uploadGeneralFile = async (chatId: string, file: File, onProgress?:
 
 export const DEVELOPER_EMAIL = 'usae4544@gmail.com';
 
-export const isDeveloperUser = (email?: string | null) => {
-  return email?.toLowerCase().trim() === DEVELOPER_EMAIL.toLowerCase();
+export const isDeveloperUser = (email?: string | null, username?: string | null) => {
+  const e = email?.toLowerCase().trim();
+  const u = username?.toLowerCase().trim();
+  return e === DEVELOPER_EMAIL.toLowerCase() || u === 'shivansh10120' || e === 'shivansh10120@soundlink.app';
 };
 
 // In-memory user profile cache for instantaneous chat list loading
