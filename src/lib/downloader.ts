@@ -25,23 +25,77 @@ export async function downloadFileToDevice(urlOrDataUrl: string, defaultFilename
 
     if (Capacitor.isNativePlatform()) {
       try {
-        const savedFile = await Filesystem.writeFile({
-          path: defaultFilename,
-          data: base64Data,
-          directory: Directory.Documents,
-          recursive: true
-        });
-        alert(`Downloaded successfully to Documents folder: ${defaultFilename}`);
-        return savedFile.uri;
-      } catch (err) {
-        const savedCache = await Filesystem.writeFile({
-          path: defaultFilename,
-          data: base64Data,
-          directory: Directory.Cache,
-          recursive: true
-        });
-        alert(`Downloaded successfully to Cache folder: ${defaultFilename}`);
-        return savedCache.uri;
+        try {
+          await Filesystem.requestPermissions();
+        } catch (pErr) {
+          console.warn('Permission request error:', pErr);
+        }
+
+        let saved = false;
+        let savedUri = '';
+
+        // Try Documents
+        try {
+          const resDoc = await Filesystem.writeFile({
+            path: defaultFilename,
+            data: base64Data,
+            directory: Directory.Documents,
+            recursive: true
+          });
+          savedUri = resDoc.uri;
+          saved = true;
+        } catch (docErr) {
+          console.warn('Documents write failed, trying ExternalStorage:', docErr);
+        }
+
+        // Try ExternalStorage if Documents failed
+        if (!saved) {
+          try {
+            const resExt = await Filesystem.writeFile({
+              path: defaultFilename,
+              data: base64Data,
+              directory: Directory.ExternalStorage,
+              recursive: true
+            });
+            savedUri = resExt.uri;
+            saved = true;
+          } catch (extErr) {
+            console.warn('ExternalStorage write failed, trying Cache:', extErr);
+          }
+        }
+
+        // Fallback to Cache
+        if (!saved) {
+          const resCache = await Filesystem.writeFile({
+            path: defaultFilename,
+            data: base64Data,
+            directory: Directory.Cache,
+            recursive: true
+          });
+          savedUri = resCache.uri;
+          saved = true;
+        }
+
+        alert(`File downloaded successfully to device storage: ${defaultFilename}`);
+        return savedUri;
+      } catch (nativeErr) {
+        console.error('Native storage error:', nativeErr);
+        // Try Web Share API if available on native/mobile web
+        if (navigator.share && blob) {
+          try {
+            const file = new File([blob], defaultFilename, { type: blob.type });
+            if (navigator.canShare && navigator.canShare({ files: [file] })) {
+              await navigator.share({
+                files: [file],
+                title: defaultFilename,
+              });
+              return '';
+            }
+          } catch (shareErr) {
+            console.warn('Share API error:', shareErr);
+          }
+        }
+        throw nativeErr;
       }
     } else {
       const blobUrl = URL.createObjectURL(blob);
@@ -67,8 +121,9 @@ export async function downloadFileToDevice(urlOrDataUrl: string, defaultFilename
       document.body.removeChild(a);
       return '';
     } catch (err) {
-      alert("Failed to download file. Please check connection.");
+      alert("Download failed. Please check file URL or connection.");
       throw e;
     }
   }
 }
+
