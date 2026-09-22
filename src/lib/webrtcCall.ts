@@ -1,4 +1,5 @@
 import { db } from '../firebase';
+import { LocalNotifications } from '@capacitor/local-notifications';
 import {
   collection,
   doc,
@@ -91,6 +92,25 @@ export function stopMobileVibration() {
 
 // Browser tab & system notification
 export function triggerIncomingCallAlert(callerName: string, callType: 'voice' | 'video', photoURL?: string) {
+  // 0. Capacitor Local Notifications for Android APK
+  try {
+    LocalNotifications.requestPermissions().then((perm) => {
+      if (perm.display === 'granted') {
+        LocalNotifications.schedule({
+          notifications: [
+            {
+              title: `📞 Incoming ${callType === 'video' ? 'Video' : 'Voice'} Call`,
+              body: `${callerName} is calling you on SoundLink. Tap to answer!`,
+              id: 9999,
+              schedule: { at: new Date(Date.now() + 50) },
+              channelId: 'soundlink_calls',
+            }
+          ]
+        }).catch(() => {});
+      }
+    }).catch(() => {});
+  } catch (e) {}
+
   // 1. Web Notification API
   if (typeof window !== 'undefined' && 'Notification' in window) {
     if (Notification.permission === 'granted') {
