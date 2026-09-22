@@ -335,8 +335,8 @@ export function stopRingtone() {
   stopOutgoingRingtone();
 }
 
-// Synthetic fallback stream for environments where camera/mic permission is blocked or unavailable
-function createSyntheticMediaStream(type: 'voice' | 'video', label: string = 'User'): MediaStream {
+// Synthetic fallback stream for environments where mic permission is blocked or unavailable (audio only)
+function createSyntheticMediaStream(label: string = 'User'): MediaStream {
   const stream = new MediaStream();
 
   try {
@@ -357,60 +357,6 @@ function createSyntheticMediaStream(type: 'voice' | 'video', label: string = 'Us
     }
   } catch (e) {
     console.warn("Could not create synthetic audio track", e);
-  }
-
-  if (type === 'video') {
-    try {
-      const canvas = document.createElement('canvas');
-      canvas.width = 640;
-      canvas.height = 480;
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        let frame = 0;
-        const draw = () => {
-          frame++;
-          ctx.fillStyle = '#09090b';
-          ctx.fillRect(0, 0, 640, 480);
-
-          const pulse = Math.sin(frame * 0.08) * 5;
-          ctx.fillStyle = '#10b981';
-          ctx.beginPath();
-          ctx.arc(320, 200, 60 + pulse, 0, Math.PI * 2);
-          ctx.fill();
-
-          ctx.fillStyle = '#ffffff';
-          ctx.font = 'bold 26px sans-serif';
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          ctx.fillText((label.slice(0, 1) || 'U').toUpperCase(), 320, 200);
-
-          ctx.fillStyle = '#e4e4e7';
-          ctx.font = 'bold 16px sans-serif';
-          ctx.fillText(label, 320, 290);
-
-          ctx.fillStyle = '#10b981';
-          ctx.font = '12px sans-serif';
-          ctx.fillText('Encrypted WebRTC Call (Simulated Stream)', 320, 320);
-
-          ctx.fillStyle = '#71717a';
-          ctx.font = '11px sans-serif';
-          ctx.fillText('Hardware camera permission not granted in browser', 320, 345);
-        };
-        draw();
-        const animInterval = setInterval(draw, 100);
-
-        const canvasStream = (canvas as any).captureStream ? (canvas as any).captureStream(15) : null;
-        if (canvasStream) {
-          const videoTrack = canvasStream.getVideoTracks()[0];
-          if (videoTrack) {
-            videoTrack.addEventListener('ended', () => clearInterval(animInterval));
-            stream.addTrack(videoTrack);
-          }
-        }
-      }
-    } catch (e) {
-      console.warn("Could not create synthetic video track", e);
-    }
   }
 
   return stream;
@@ -534,7 +480,7 @@ export class WebRTCCallService {
 
         console.warn("Hardware media access not available or permission denied. Using synthetic media stream:", mediaErr?.message);
         this.isSimulatedMedia = true;
-        this.localStream = createSyntheticMediaStream(type, userLabel);
+        this.localStream = createSyntheticMediaStream(userLabel);
         this.emitLocalStream(this.localStream);
         return this.localStream;
       }
@@ -542,7 +488,7 @@ export class WebRTCCallService {
 
     console.warn("navigator.mediaDevices not available. Using synthetic media stream.");
     this.isSimulatedMedia = true;
-    this.localStream = createSyntheticMediaStream(type, userLabel);
+    this.localStream = createSyntheticMediaStream(userLabel);
     this.emitLocalStream(this.localStream);
     return this.localStream;
   }

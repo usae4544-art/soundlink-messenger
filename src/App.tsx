@@ -3,6 +3,7 @@ import { apiFetch } from './lib/apiHelper';
 import { downloadFileToDevice } from './lib/downloader';
 import { db } from './firebase';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { App as CapApp } from '@capacitor/app';
 import { CustomLoginModal } from './components/CustomLoginModal';
 import { CustomUser } from './lib/customAuth';
 import {
@@ -188,13 +189,22 @@ export default function App() {
     const isDev = isDeveloperUser(fbUser.email);
     const userRef = doc(db, 'users', fbUser.uid);
     const userDoc = await getDoc(userRef);
+
+    const baseLoginData = {
+      joined: true,
+      online: true,
+      lastLogin: Date.now(),
+      lastActive: Date.now()
+    };
     
     if (userDoc.exists()) {
       const data = userDoc.data();
       if (isDev && data.role !== 'developer') {
-        await setDoc(userRef, { role: 'developer', isDeveloper: true }, { merge: true });
+        await setDoc(userRef, { ...baseLoginData, role: 'developer', isDeveloper: true }, { merge: true });
         data.role = 'developer';
         data.isDeveloper = true;
+      } else {
+        await setDoc(userRef, baseLoginData, { merge: true });
       }
       setUserProfile(data);
       if (!data.username) setShowProfileSetup(true);
@@ -204,7 +214,8 @@ export default function App() {
         email: u.email,
         displayName: u.name,
         photoURL: u.picture,
-        createdAt: Date.now()
+        createdAt: Date.now(),
+        ...baseLoginData
       };
       if (isDev) {
         newProfile.role = 'developer';
@@ -231,7 +242,15 @@ export default function App() {
 
     const userRef = doc(db, 'users', customUser.uid);
     const docSnap = await getDoc(userRef);
+    const baseLoginData = {
+      joined: true,
+      online: true,
+      lastLogin: Date.now(),
+      lastActive: Date.now()
+    };
+
     if (docSnap.exists()) {
+      await setDoc(userRef, baseLoginData, { merge: true });
       setUserProfile(docSnap.data());
     } else {
       const newProfile = {
@@ -241,12 +260,57 @@ export default function App() {
         email: customUser.username + '@soundlink.app',
         isDeveloper: customUser.isDeveloper,
         role: customUser.role,
-        createdAt: Date.now()
+        createdAt: Date.now(),
+        ...baseLoginData
       };
       await setDoc(userRef, newProfile);
       setUserProfile(newProfile);
     }
   };
+
+  // Background app state and heartbeat listener for calls & notifications
+  useEffect(() => {
+    let heartbeatInterval: any;
+    const setupBackgroundListener = async () => {
+      try {
+        CapApp.addListener('appStateChange', async (state) => {
+          console.log('App state changed:', state);
+          if (user?.uid) {
+            try {
+              await setDoc(doc(db, 'users', user.uid), {
+                online: state.isActive,
+                lastActive: Date.now(),
+                joined: true
+              }, { merge: true });
+            } catch (e) {
+              console.error('Failed to update online state:', e);
+            }
+          }
+        });
+
+        // Heartbeat interval to keep connection / status fresh
+        heartbeatInterval = setInterval(async () => {
+          if (user?.uid) {
+            try {
+              await setDoc(doc(db, 'users', user.uid), {
+                lastActive: Date.now(),
+                online: true,
+                joined: true
+              }, { merge: true });
+            } catch (e) {}
+          }
+        }, 30000);
+      } catch (e) {
+        console.warn('Background app listener setup failed:', e);
+      }
+    };
+
+    setupBackgroundListener();
+
+    return () => {
+      if (heartbeatInterval) clearInterval(heartbeatInterval);
+    };
+  }, [user?.uid]);
 
   const handleLogout = () => {
     setUser(null);
