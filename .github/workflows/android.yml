@@ -2,7 +2,7 @@ name: Build Android APK
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "master" ]
   workflow_dispatch:
 
 jobs:
@@ -13,30 +13,43 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Set up JDK 17
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: 'npm'
+
+    - name: Set up JDK 21
       uses: actions/setup-java@v4
       with:
-        java-version: '17'
         distribution: 'temurin'
+        java-version: '21'
 
-    - name: Find and setup gradlew
-      run: find . -name "gradlew" -exec chmod +x {} + || true
+    - name: Install Node Dependencies
+      run: npm install
 
-    - name: Generate dummy debug keystore
-      run: keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "C=US, O=Android, CN=Android Debug"
+    - name: Run Web Build
+      run: npm run build
+
+    - name: Sync Capacitor Android
+      run: npx cap sync android
+
+    - name: Align Kotlin & Gradle Versions
+      run: node patch-gradle.js
 
     - name: Build Debug APK
       run: |
-        if [ -f "gradlew" ]; then
-          ./gradlew assembleDebug
-        elif [ -d "android" ] && [ -f "android/gradlew" ]; then
-          cd android && ./gradlew assembleDebug
-        else
-          gradle assembleDebug
-        fi
+        export ANDROID_HOME=$ANDROID_SDK_ROOT
+        echo "sdk.dir=$ANDROID_SDK_ROOT" > android/local.properties
+        cd android
+        chmod +x gradlew
+        ./gradlew clean assembleDebug
 
-    - name: Upload all APKs
+    - name: Upload APK as Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: my-android-app
-        path: '**/*.apk'
+        name: android-debug-apk
+        path: |
+          android/app/build/outputs/apk/debug/app-debug.apk
+        if-no-files-found: error
+
