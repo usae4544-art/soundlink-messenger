@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { apiFetch } from './lib/apiHelper';
+import { downloadFileToDevice } from './lib/downloader';
 import { db } from './firebase';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { CustomLoginModal } from './components/CustomLoginModal';
@@ -546,15 +547,21 @@ export default function App() {
   // Handle Real Audio Upload (Instant)
   const handleRealAudioUpload = (e: React.ChangeEvent<HTMLInputElement> | DragEvent | File) => {
     let file: File | undefined;
+    let targetInput: HTMLInputElement | null = null;
     if (e instanceof File) {
       file = e;
     } else if ('dataTransfer' in e && e.dataTransfer?.files?.[0]) {
       file = e.dataTransfer.files[0];
     } else if ('target' in e && e.target && (e.target as HTMLInputElement).files?.[0]) {
-      file = (e.target as HTMLInputElement).files![0];
+      targetInput = e.target as HTMLInputElement;
+      file = targetInput.files![0];
     }
 
     if (!file) return;
+
+    if (targetInput) {
+      targetInput.value = '';
+    }
 
     setRealImageDataUrl(null);
     setRealVideoDataUrl(null);
@@ -579,15 +586,21 @@ export default function App() {
   // Handle Real Video Upload (Instant)
   const handleRealVideoUpload = (e: React.ChangeEvent<HTMLInputElement> | DragEvent | File) => {
     let file: File | undefined;
+    let targetInput: HTMLInputElement | null = null;
     if (e instanceof File) {
       file = e;
     } else if ('dataTransfer' in e && e.dataTransfer?.files?.[0]) {
       file = e.dataTransfer.files[0];
     } else if ('target' in e && e.target && (e.target as HTMLInputElement).files?.[0]) {
-      file = (e.target as HTMLInputElement).files![0];
+      targetInput = e.target as HTMLInputElement;
+      file = targetInput.files![0];
     }
 
     if (!file) return;
+
+    if (targetInput) {
+      targetInput.value = '';
+    }
 
     setRealImageDataUrl(null);
     setRealAudioDataUrl(null);
@@ -612,15 +625,21 @@ export default function App() {
   // Handle Real Photo Upload (Instant)
   const handleRealPhotoUpload = (e: React.ChangeEvent<HTMLInputElement> | DragEvent | File) => {
     let file: File | undefined;
+    let targetInput: HTMLInputElement | null = null;
     if (e instanceof File) {
       file = e;
     } else if ('dataTransfer' in e && e.dataTransfer?.files?.[0]) {
       file = e.dataTransfer.files[0];
     } else if ('target' in e && e.target && (e.target as HTMLInputElement).files?.[0]) {
-      file = (e.target as HTMLInputElement).files![0];
+      targetInput = e.target as HTMLInputElement;
+      file = targetInput.files![0];
     }
 
     if (!file) return;
+
+    if (targetInput) {
+      targetInput.value = '';
+    }
 
     setRealVideoDataUrl(null);
     setRealAudioDataUrl(null);
@@ -1404,7 +1423,7 @@ export default function App() {
                     type="file"
                     ref={imageUploadRef}
                     onChange={handleRealPhotoUpload}
-                    accept="image/*"
+                    accept="image/*,.jpg,.jpeg,.png,.webp,.gif"
                     className="hidden"
                   />
                 </div>
@@ -1479,7 +1498,7 @@ export default function App() {
                     type="file"
                     ref={videoUploadRef}
                     onChange={handleRealVideoUpload}
-                    accept="video/*"
+                    accept="video/*,.mp4,.webm,.mov,.m4v,.3gp,.avi"
                     className="hidden"
                   />
                 </div>
@@ -1557,7 +1576,7 @@ export default function App() {
                     type="file"
                     ref={audioUploadRef}
                     onChange={handleRealAudioUpload}
-                    accept="audio/*"
+                    accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg"
                     className="hidden"
                   />
                 </div>
@@ -2007,13 +2026,12 @@ export default function App() {
                               <span>
                                 {msg.audioMeta?.mimeType} • {(msg.audioMeta?.size || 0) > 1024 * 1024 ? `${((msg.audioMeta?.size || 0) / (1024 * 1024)).toFixed(1)} MB` : `${Math.round((msg.audioMeta?.size || 0) / 1024)} KB`}
                               </span>
-                              <a
-                                href={msg.audioDataUrl}
-                                download={msg.audioMeta?.name || 'soundlink_audio.mp3'}
-                                className="px-3 py-1 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 rounded-lg border border-emerald-500/20 font-medium flex items-center gap-1 transition-colors"
+                              <button
+                                onClick={() => downloadFileToDevice(msg.audioDataUrl, msg.audioMeta?.name || 'soundlink_audio.mp3')}
+                                className="px-3 py-1 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 rounded-lg border border-emerald-500/20 font-medium flex items-center gap-1 transition-colors cursor-pointer"
                               >
                                 <Download className="w-3.5 h-3.5" /> Download Audio
-                              </a>
+                              </button>
                             </div>
                             <div className="flex flex-col gap-2 w-full mt-2">
                               {aiInsights[msg.id]?.loading ? (
@@ -2055,13 +2073,12 @@ export default function App() {
                               <span>
                                 {msg.videoMeta?.mimeType} • {(msg.videoMeta?.size || 0) > 1024 * 1024 ? `${((msg.videoMeta?.size || 0) / (1024 * 1024)).toFixed(1)} MB` : `${Math.round((msg.videoMeta?.size || 0) / 1024)} KB`}
                               </span>
-                              <a
-                                href={msg.videoDataUrl}
-                                download={msg.videoMeta?.name || 'soundlink_video.mp4'}
-                                className="px-3 py-1 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 rounded-lg border border-emerald-500/20 font-medium flex items-center gap-1 transition-colors"
+                              <button
+                                onClick={() => downloadFileToDevice(msg.videoDataUrl, msg.videoMeta?.name || 'soundlink_video.mp4')}
+                                className="px-3 py-1 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 rounded-lg border border-emerald-500/20 font-medium flex items-center gap-1 transition-colors cursor-pointer"
                               >
                                 <Download className="w-3.5 h-3.5" /> Download Video
-                              </a>
+                              </button>
                             </div>
                             <div className="flex flex-col gap-2 w-full mt-2">
                               {aiInsights[msg.id]?.loading ? (
@@ -2103,13 +2120,12 @@ export default function App() {
                               <span>
                                 {msg.imageMeta?.width} × {msg.imageMeta?.height}px
                               </span>
-                              <a
-                                href={msg.imageDataUrl}
-                                download={msg.imageMeta?.name || 'soundlink_photo.png'}
-                                className="px-3 py-1 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 rounded-lg border border-emerald-500/20 font-medium flex items-center gap-1 transition-colors"
+                              <button
+                                onClick={() => downloadFileToDevice(msg.imageDataUrl, msg.imageMeta?.name || 'soundlink_photo.png')}
+                                className="px-3 py-1 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 rounded-lg border border-emerald-500/20 font-medium flex items-center gap-1 transition-colors cursor-pointer"
                               >
                                 <Download className="w-3.5 h-3.5" /> Download Photo
-                              </a>
+                              </button>
                             </div>
                             <div className="flex flex-col gap-2 w-full mt-2">
                               {aiInsights[msg.id]?.loading ? (

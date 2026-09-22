@@ -105,26 +105,37 @@ app.post('/api/upload-chunk', upload.single('chunk'), (req, res) => {
   const tempDir = path.join(uploadsDir, 'temp_' + uploadId);
   if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
   
-  const chunkPath = path.join(tempDir, chunkIndex);
+  const chunkPath = path.join(tempDir, `chunk_${chunkIndex}`);
   fs.renameSync(req.file.path, chunkPath);
   
-  if (parseInt(chunkIndex) === parseInt(totalChunks) - 1) {
-    const finalFilename = uploadId + '-' + originalName.replace(/[^a-zA-Z0-9.-]/g, '_');
+  const expectedChunks = parseInt(totalChunks);
+  const receivedFiles = fs.readdirSync(tempDir).filter(f => f.startsWith('chunk_'));
+  const receivedChunks = receivedFiles.length;
+  
+  if (receivedChunks === expectedChunks) {
+    const finalFilename = uploadId + '-' + (originalName ? originalName.replace(/[^a-zA-Z0-9.-]/g, '_') : 'video.mp4');
     const finalPath = path.join(uploadsDir, finalFilename);
     const writeStream = fs.createWriteStream(finalPath);
     
-    for (let i = 0; i < parseInt(totalChunks); i++) {
-      const data = fs.readFileSync(path.join(tempDir, i.toString()));
-      writeStream.write(data);
+    for (let i = 0; i < expectedChunks; i++) {
+      const p = path.join(tempDir, `chunk_${i}`);
+      if (fs.existsSync(p)) {
+        const data = fs.readFileSync(p);
+        writeStream.write(data);
+      }
     }
     writeStream.end();
     
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    setTimeout(() => {
+      try {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      } catch (e) {}
+    }, 1000);
     
     return res.json({ success: true, url: `/uploads/${finalFilename}` });
   }
   
-  res.json({ success: true });
+  res.json({ success: true, received: receivedChunks, total: expectedChunks });
 });
 
 // Payload Storage with Disk Persistence

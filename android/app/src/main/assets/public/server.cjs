@@ -112,21 +112,32 @@ app.post("/api/upload-chunk", upload.single("chunk"), (req, res) => {
   if (!req.file) return res.status(400).json({ error: "No chunk" });
   const tempDir = import_path.default.join(uploadsDir, "temp_" + uploadId);
   if (!import_fs.default.existsSync(tempDir)) import_fs.default.mkdirSync(tempDir, { recursive: true });
-  const chunkPath = import_path.default.join(tempDir, chunkIndex);
+  const chunkPath = import_path.default.join(tempDir, `chunk_${chunkIndex}`);
   import_fs.default.renameSync(req.file.path, chunkPath);
-  if (parseInt(chunkIndex) === parseInt(totalChunks) - 1) {
-    const finalFilename = uploadId + "-" + originalName.replace(/[^a-zA-Z0-9.-]/g, "_");
+  const expectedChunks = parseInt(totalChunks);
+  const receivedFiles = import_fs.default.readdirSync(tempDir).filter((f) => f.startsWith("chunk_"));
+  const receivedChunks = receivedFiles.length;
+  if (receivedChunks === expectedChunks) {
+    const finalFilename = uploadId + "-" + (originalName ? originalName.replace(/[^a-zA-Z0-9.-]/g, "_") : "video.mp4");
     const finalPath = import_path.default.join(uploadsDir, finalFilename);
     const writeStream = import_fs.default.createWriteStream(finalPath);
-    for (let i = 0; i < parseInt(totalChunks); i++) {
-      const data = import_fs.default.readFileSync(import_path.default.join(tempDir, i.toString()));
-      writeStream.write(data);
+    for (let i = 0; i < expectedChunks; i++) {
+      const p = import_path.default.join(tempDir, `chunk_${i}`);
+      if (import_fs.default.existsSync(p)) {
+        const data = import_fs.default.readFileSync(p);
+        writeStream.write(data);
+      }
     }
     writeStream.end();
-    import_fs.default.rmSync(tempDir, { recursive: true, force: true });
+    setTimeout(() => {
+      try {
+        import_fs.default.rmSync(tempDir, { recursive: true, force: true });
+      } catch (e) {
+      }
+    }, 1e3);
     return res.json({ success: true, url: `/uploads/${finalFilename}` });
   }
-  res.json({ success: true });
+  res.json({ success: true, received: receivedChunks, total: expectedChunks });
 });
 var PAYLOADS_FILE = import_path.default.join(process.cwd(), "payloads.json");
 var payloads = /* @__PURE__ */ new Map();
