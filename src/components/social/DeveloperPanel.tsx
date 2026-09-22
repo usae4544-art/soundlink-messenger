@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { apiFetch } from '../../lib/apiHelper';
 import { subscribeToAllUsers, setUserSuspendedStatus, DEVELOPER_EMAIL, isDeveloperUser } from '../../lib/social';
 import {
   Shield,
@@ -50,7 +51,7 @@ export function DeveloperPanel({ onClose, currentUser }: Props) {
 
   const fetchStorageStats = async () => {
     try {
-      const res = await fetch('/api/storage-status');
+      const res = await apiFetch('/api/storage-status');
       if (res.ok) {
         const data = await res.json();
         setStorageStats(data);
@@ -72,7 +73,7 @@ export function DeveloperPanel({ onClose, currentUser }: Props) {
   const handleForceCleanup = async () => {
     setCleaning(true);
     try {
-      const res = await fetch('/api/cleanup-storage', { method: 'POST' });
+      const res = await apiFetch('/api/cleanup-storage', { method: 'POST' });
       const data = await res.json();
       alert(`Cleanup Complete: Purged ${data.cleanedCount || 0} expired files. Freed ${((data.freedBytes || 0) / 1024 / 1024).toFixed(2)} MB.`);
       await fetchStorageStats();

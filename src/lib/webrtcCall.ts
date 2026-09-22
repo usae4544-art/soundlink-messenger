@@ -1,5 +1,6 @@
 import { db } from '../firebase';
 import { LocalNotifications } from '@capacitor/local-notifications';
+import { apiFetch } from './apiHelper';
 import {
   collection,
   doc,
@@ -634,7 +635,7 @@ export class WebRTCCallService {
       if (receiverSnap.exists()) {
         const rData = receiverSnap.data();
         if (rData.pushSubscription) {
-          await fetch('/api/send-push', {
+          await apiFetch('/api/send-push', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({

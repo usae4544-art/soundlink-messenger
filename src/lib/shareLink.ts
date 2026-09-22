@@ -1,4 +1,5 @@
 import { PayloadType, DecodedPayload, ImageMetadata, VideoMetadata, AudioMetadata } from '../types';
+import { apiFetch } from './apiHelper';
 import { 
   broadcastData, 
   generateTokenFromBytes, 
@@ -31,7 +32,7 @@ export async function uploadBlobMedia(blob: Blob, filename: string): Promise<str
     try {
       const formData = new FormData();
       formData.append('file', file, filename);
-      const res = await fetch('/api/upload', { method: 'POST', body: formData });
+      const res = await apiFetch('/api/upload', { method: 'POST', body: formData });
       if (res.ok) {
         const data = await res.json();
         if (data.url) return data.url;
@@ -59,7 +60,7 @@ export async function uploadBlobMedia(blob: Blob, filename: string): Promise<str
     formData.append('totalChunks', totalChunks.toString());
     formData.append('uploadId', uploadId);
     
-    const res = await fetch('/api/upload-chunk', { method: 'POST', body: formData });
+    const res = await apiFetch('/api/upload-chunk', { method: 'POST', body: formData });
     if (!res.ok) throw new Error('Upload failed with status ' + res.status);
     const data = await res.json();
     if (data.url) finalUrl = data.url;
@@ -104,7 +105,7 @@ export async function publishSharePayload(params: PublishShareParams): Promise<{
 
   // Persist to server payload store
   try {
-    const res = await fetch('/api/upload-payload', {
+    const res = await apiFetch('/api/upload-payload', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

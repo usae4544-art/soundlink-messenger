@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { apiFetch } from '../../lib/apiHelper';
 import {
   searchUsers,
   sendFriendRequest,
@@ -70,7 +71,7 @@ export function SocialTab({ user, userProfile, onDecodeRequest }: Props) {
   const [storageMetrics, setStorageMetrics] = useState<any>(null);
 
   useEffect(() => {
-    fetch('/api/storage-status')
+    apiFetch('/api/storage-status')
       .then((r) => r.json())
       .then((data) => setStorageMetrics(data))
       .catch(() => {});

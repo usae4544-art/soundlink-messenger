@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-
+import { apiFetch } from './lib/apiHelper';
 import { db } from './firebase';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { CustomLoginModal } from './components/CustomLoginModal';
@@ -128,7 +128,7 @@ export default function App() {
         if ('serviceWorker' in navigator && 'PushManager' in window) {
           await navigator.serviceWorker.register('/sw.js');
           const reg = await navigator.serviceWorker.ready;
-          const res = await fetch('/api/vapid-public-key');
+          const res = await apiFetch('/api/vapid-public-key');
           const vapidPublicKey = await res.text();
           const convertedVapidKey = urlBase64ToUint8Array(vapidPublicKey);
 
@@ -339,7 +339,7 @@ export default function App() {
         payload.mimeType = mimeType || 'image/png';
       }
 
-      const res = await fetch('/api/insights', {
+      const res = await apiFetch('/api/insights', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),

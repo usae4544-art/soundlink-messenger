@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { apiFetch } from '../lib/apiHelper';
 import {
   HardDrive,
   Trash2,
@@ -51,7 +52,7 @@ export function StorageManagerModal({ isOpen = true, onClose }: Props) {
   const fetchStats = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/storage-status');
+      const res = await apiFetch('/api/storage-status');
       if (res.ok) {
         const data = await res.json();
         setStats(data);
@@ -79,7 +80,7 @@ export function StorageManagerModal({ isOpen = true, onClose }: Props) {
   const handlePurgeExpired = async () => {
     setPurging(true);
     try {
-      const res = await fetch('/api/cleanup-storage', { method: 'POST' });
+      const res = await apiFetch('/api/cleanup-storage', { method: 'POST' });
       const data = await res.json();
       setFeedback(`Purge complete: Removed ${data.cleanedCount || 0} old files. Freed ${((data.freedBytes || 0) / 1024 / 1024).toFixed(2)} MB.`);
       await fetchStats();

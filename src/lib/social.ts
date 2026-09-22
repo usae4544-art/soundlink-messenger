@@ -1,6 +1,7 @@
 import { db } from '../firebase';
 import { collection, doc, getDoc, setDoc, query, where, getDocs, updateDoc, onSnapshot, addDoc, orderBy } from 'firebase/firestore';
 import { LocalNotifications } from '@capacitor/local-notifications';
+import { apiFetch } from './apiHelper';
 
 
 export const checkUsernameUnique = async (username: string) => {
@@ -77,7 +78,7 @@ export const sendFriendRequest = async (fromUid: string, toUid: string) => {
     const targetData = targetUser.data();
     if (targetData.pushSubscription) {
       try {
-        await fetch('/api/send-push', {
+        await apiFetch('/api/send-push', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -162,7 +163,7 @@ export const sendMessage = async (chatId: string, senderId: string, text: string
 
         const tData = targetUser.data();
         if (tData.pushSubscription) {
-          await fetch('/api/send-push', {
+          await apiFetch('/api/send-push', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -182,7 +183,7 @@ export const sendMessage = async (chatId: string, senderId: string, text: string
 export const uploadSoundFile = async (chatId: string, file: Blob) => {
   const formData = new FormData();
   formData.append('file', file, `${Date.now()}.wav`);
-  const res = await fetch('/api/upload', { method: 'POST', body: formData });
+  const res = await apiFetch('/api/upload', { method: 'POST', body: formData });
   const data = await res.json();
   return data.url;
 };
@@ -206,7 +207,7 @@ export const uploadGeneralFile = async (chatId: string, file: File, onProgress?:
     formData.append('totalChunks', totalChunks.toString());
     formData.append('uploadId', uploadId);
     
-    const res = await fetch('/api/upload-chunk', { method: 'POST', body: formData });
+    const res = await apiFetch('/api/upload-chunk', { method: 'POST', body: formData });
     if (!res.ok) throw new Error('Upload failed with status ' + res.status);
     const data = await res.json();
     
