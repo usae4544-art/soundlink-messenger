@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { apiFetch } from './lib/apiHelper';
 import { downloadFileToDevice } from './lib/downloader';
+import { uploadFileToGoogleDrive } from './lib/googleDrive';
 import { db } from './firebase';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { App as CapApp } from '@capacitor/app';
@@ -348,6 +349,8 @@ export default function App() {
   const [generatedShareUrl, setGeneratedShareUrl] = useState<string>('');
   const [lastSharedToken, setLastSharedToken] = useState<string>('');
   const [isPublishingShare, setIsPublishingShare] = useState<boolean>(false);
+  const [isUploadingToDrive, setIsUploadingToDrive] = useState<boolean>(false);
+  const [googleDriveLink, setGoogleDriveLink] = useState<string | null>(null);
 
   // Link Recipient State (Listen tab)
   const [linkReceivedPayload, setLinkReceivedPayload] = useState<DecodedPayload | null>(null);
@@ -494,6 +497,78 @@ export default function App() {
     }
   }, [message, sendMode, broadcastExpiryMs, textAcousticToken]);
 
+  // Image Mode: auto-generate share link on image selection
+  useEffect(() => {
+    if (sendMode === 'image' && realImageDataUrl) {
+      const handler = setTimeout(() => {
+        const token = imageAcousticToken || createAcousticToken('IMG');
+        if (!imageAcousticToken) setImageAcousticToken(token);
+        publishSharePayload({
+          type: 'image',
+          token,
+          dataUrl: realImageDataUrl,
+          meta: realImageMeta,
+          expiresIn: broadcastExpiryMs > 0 ? broadcastExpiryMs : undefined,
+          senderName: userProfile?.username || user?.displayName || 'SoundLink User',
+        })
+          .then(({ shareUrl }) => {
+            setGeneratedShareUrl(shareUrl);
+            setLastSharedToken(token);
+          })
+          .catch(console.error);
+      }, 400);
+      return () => clearTimeout(handler);
+    }
+  }, [realImageDataUrl, sendMode, broadcastExpiryMs, imageAcousticToken, realImageMeta]);
+
+  // Video Mode: auto-generate share link on video selection
+  useEffect(() => {
+    if (sendMode === 'video' && realVideoDataUrl) {
+      const handler = setTimeout(() => {
+        const token = videoAcousticToken || createAcousticToken('VID');
+        if (!videoAcousticToken) setVideoAcousticToken(token);
+        publishSharePayload({
+          type: 'video',
+          token,
+          dataUrl: realVideoDataUrl,
+          meta: realVideoMeta,
+          expiresIn: broadcastExpiryMs > 0 ? broadcastExpiryMs : undefined,
+          senderName: userProfile?.username || user?.displayName || 'SoundLink User',
+        })
+          .then(({ shareUrl }) => {
+            setGeneratedShareUrl(shareUrl);
+            setLastSharedToken(token);
+          })
+          .catch(console.error);
+      }, 400);
+      return () => clearTimeout(handler);
+    }
+  }, [realVideoDataUrl, sendMode, broadcastExpiryMs, videoAcousticToken, realVideoMeta]);
+
+  // Audio Mode: auto-generate share link on audio selection
+  useEffect(() => {
+    if (sendMode === 'audio' && realAudioDataUrl) {
+      const handler = setTimeout(() => {
+        const token = audioAcousticToken || createAcousticToken('AUD');
+        if (!audioAcousticToken) setAudioAcousticToken(token);
+        publishSharePayload({
+          type: 'audio',
+          token,
+          dataUrl: realAudioDataUrl,
+          meta: realAudioMeta,
+          expiresIn: broadcastExpiryMs > 0 ? broadcastExpiryMs : undefined,
+          senderName: userProfile?.username || user?.displayName || 'SoundLink User',
+        })
+          .then(({ shareUrl }) => {
+            setGeneratedShareUrl(shareUrl);
+            setLastSharedToken(token);
+          })
+          .catch(console.error);
+      }, 400);
+      return () => clearTimeout(handler);
+    }
+  }, [realAudioDataUrl, sendMode, broadcastExpiryMs, audioAcousticToken, realAudioMeta]);
+
   // Publish or re-publish share link
   const ensureAndPublishShareLink = async (explicitUserAction: boolean = false): Promise<string | null> => {
     let token = '';
@@ -503,22 +578,36 @@ export default function App() {
 
     if (sendMode === 'image' && realImageDataUrl) {
       token = imageAcousticToken || createAcousticToken('IMG');
+      if (!imageAcousticToken) setImageAcousticToken(token);
       dataUrl = realImageDataUrl;
       meta = realImageMeta;
     } else if (sendMode === 'video' && realVideoDataUrl) {
       token = videoAcousticToken || createAcousticToken('VID');
+      if (!videoAcousticToken) setVideoAcousticToken(token);
       dataUrl = realVideoDataUrl;
       meta = realVideoMeta;
     } else if (sendMode === 'audio' && realAudioDataUrl) {
       token = audioAcousticToken || createAcousticToken('AUD');
+      if (!audioAcousticToken) setAudioAcousticToken(token);
       dataUrl = realAudioDataUrl;
       meta = realAudioMeta;
     } else if (sendMode === 'text' && message.trim()) {
       token = textAcousticToken || createAcousticToken('TXT');
+      if (!textAcousticToken) setTextAcousticToken(token);
       text = message.trim();
     }
 
     if (!token) return null;
+
+    // Instantly generate and display share URL for instant user feedback
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    const instantUrl = new URL(origin + '/');
+    instantUrl.searchParams.set('listenToken', token);
+    instantUrl.searchParams.set('type', sendMode);
+    if (text) instantUrl.searchParams.set('t', text.slice(0, 150));
+    
+    setGeneratedShareUrl(instantUrl.toString());
+    setLastSharedToken(token);
 
     setIsPublishingShare(true);
     try {
@@ -536,9 +625,53 @@ export default function App() {
       return shareUrl;
     } catch (e) {
       console.error('Failed to publish share payload', e);
-      return null;
+      return instantUrl.toString();
     } finally {
       setIsPublishingShare(false);
+    }
+  };
+
+  // Sync media to Google Drive
+  const handleSyncToGoogleDrive = async () => {
+    if (!realVideoDataUrl && !realImageDataUrl && !realAudioDataUrl) {
+      alert('Please upload a video, photo or audio file first.');
+      return;
+    }
+    setIsUploadingToDrive(true);
+    try {
+      let file: File | Blob | undefined;
+      let fileName = 'SoundLink_Media';
+      let mimeType = 'video/mp4';
+
+      if (sendMode === 'video' && videoAcousticToken) {
+        const local = retrieveVideoLocally(videoAcousticToken);
+        file = local?.file || await fetch(realVideoDataUrl!).then(r => r.blob());
+        fileName = realVideoMeta?.name || 'video.mp4';
+        mimeType = realVideoMeta?.mimeType || 'video/mp4';
+      } else if (sendMode === 'image' && imageAcousticToken) {
+        const local = retrieveImageLocally(imageAcousticToken);
+        file = local?.file || await fetch(realImageDataUrl!).then(r => r.blob());
+        fileName = realImageMeta?.name || 'image.png';
+        mimeType = realImageMeta?.mimeType || 'image/png';
+      } else if (sendMode === 'audio' && audioAcousticToken) {
+        const local = retrieveAudioLocally(audioAcousticToken);
+        file = local?.file || await fetch(realAudioDataUrl!).then(r => r.blob());
+        fileName = realAudioMeta?.name || 'audio.mp3';
+        mimeType = realAudioMeta?.mimeType || 'audio/mp3';
+      }
+
+      if (!file) {
+        throw new Error('No media file found to upload.');
+      }
+
+      const res = await uploadFileToGoogleDrive(file, fileName, mimeType);
+      setGoogleDriveLink(res.webViewLink || null);
+      setLiveHex(`GOOGLE_DRIVE_SYNC_SUCCESS: Uploaded ${fileName} to Google Drive! (${res.id})`);
+    } catch (err: any) {
+      console.error('Google Drive sync error:', err);
+      alert('Google Drive sync failed: ' + (err.message || err));
+    } finally {
+      setIsUploadingToDrive(false);
     }
   };
 
@@ -645,6 +778,7 @@ export default function App() {
     setAudioAcousticToken(token);
 
     storeAudioLocally(token, dataUrl, meta, file);
+    setTimeout(() => ensureAndPublishShareLink(true), 10);
   };
 
   // Handle Real Video Upload (Instant)
@@ -684,6 +818,7 @@ export default function App() {
     setVideoAcousticToken(token);
 
     storeVideoLocally(token, dataUrl, meta, file);
+    setTimeout(() => ensureAndPublishShareLink(true), 10);
   };
 
   // Handle Real Photo Upload (Instant)
@@ -725,6 +860,7 @@ export default function App() {
     setImageAcousticToken(token);
 
     storeImageLocally(token, dataUrl, meta, file);
+    setTimeout(() => ensureAndPublishShareLink(true), 10);
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -872,53 +1008,9 @@ export default function App() {
     await new Promise((r) => setTimeout(r, 80));
 
     try {
-      // Ensure share link is published so recipient can decode via link
-      ensureAndPublishShareLink().catch(console.error);
+      // Ensure share link is published and uploaded first so video transfer is ready
+      await ensureAndPublishShareLink();
       addToSentHistory();
-      
-      // Upload media to cloud in background for cross-device support
-      if (sendMode !== 'text') {
-        let payloadToken = '';
-        let payloadDataUrl = '';
-        let payloadMeta: any = {};
-        
-        if (sendMode === 'image') {
-          payloadToken = imageAcousticToken;
-          payloadDataUrl = realImageDataUrl || '';
-          payloadMeta = realImageMeta || {};
-        } else if (sendMode === 'video') {
-          payloadToken = videoAcousticToken;
-          payloadDataUrl = realVideoDataUrl || '';
-          payloadMeta = realVideoMeta || {};
-        } else if (sendMode === 'audio') {
-          payloadToken = audioAcousticToken;
-          payloadDataUrl = realAudioDataUrl || '';
-          payloadMeta = realAudioMeta || {};
-        }
-        
-        if (payloadToken && payloadDataUrl) {
-          (async () => {
-            let finalDataUrl = payloadDataUrl;
-            if (finalDataUrl.startsWith('blob:')) {
-              try {
-                const res = await fetch(finalDataUrl);
-                const blob = await res.blob();
-                finalDataUrl = await uploadBlobMedia(blob, payloadMeta?.name || 'media.bin');
-              } catch (e) { console.error('Upload failed', e); }
-            }
-            fetch('/api/upload-payload', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                token: payloadToken,
-                dataUrl: finalDataUrl,
-                meta: payloadMeta,
-                expiresIn: broadcastExpiryMs > 0 ? broadcastExpiryMs : undefined
-              })
-            }).catch(console.error);
-          })();
-        }
-      }
 
       await broadcastData(
         sendMode,
@@ -945,6 +1037,7 @@ export default function App() {
 
     setIsSending(true);
     try {
+      await ensureAndPublishShareLink();
       addToSentHistory();
       let mediaPayload;
       if (sendMode === 'image' && realImageDataUrl && realImageMeta) {
@@ -955,53 +1048,6 @@ export default function App() {
         mediaPayload = retrieveAudioLocally(audioAcousticToken) || { dataUrl: realAudioDataUrl, meta: realAudioMeta };
       }
 
-      // Ensure share link is published
-      ensureAndPublishShareLink().catch(console.error);
-
-      // Upload to cloud as backup for WhatsApp/sharing which strips WAV metadata
-      if (sendMode !== 'text') {
-        let payloadToken = '';
-        let payloadDataUrl = '';
-        let payloadMeta: any = {};
-        
-        if (sendMode === 'image') {
-          payloadToken = imageAcousticToken;
-          payloadDataUrl = realImageDataUrl || '';
-          payloadMeta = realImageMeta || {};
-        } else if (sendMode === 'video') {
-          payloadToken = videoAcousticToken;
-          payloadDataUrl = realVideoDataUrl || '';
-          payloadMeta = realVideoMeta || {};
-        } else if (sendMode === 'audio') {
-          payloadToken = audioAcousticToken;
-          payloadDataUrl = realAudioDataUrl || '';
-          payloadMeta = realAudioMeta || {};
-        }
-        
-        if (payloadToken && payloadDataUrl) {
-          (async () => {
-            let finalDataUrl = payloadDataUrl;
-            if (finalDataUrl.startsWith('blob:')) {
-              try {
-                const res = await fetch(finalDataUrl);
-                const blob = await res.blob();
-                finalDataUrl = await uploadBlobMedia(blob, payloadMeta?.name || 'media.bin');
-              } catch (e) { console.error('Upload failed', e); }
-            }
-            fetch('/api/upload-payload', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                token: payloadToken,
-                dataUrl: finalDataUrl,
-                meta: payloadMeta,
-                expiresIn: broadcastExpiryMs > 0 ? broadcastExpiryMs : undefined
-              })
-            }).catch(console.error);
-          })();
-        }
-      }
-      
       const blob = await generateWavBlob(sendMode, getPayloadToBroadcast(), mediaPayload);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -1293,6 +1339,8 @@ export default function App() {
               </button>
             )}
             
+
+
             <button
               onClick={() => setShowStorageManager(true)}
               className="p-1.5 sm:px-2.5 sm:py-1.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-700/60 text-xs font-medium flex items-center gap-1.5 transition-colors active:scale-95 shrink-0"
@@ -1793,6 +1841,56 @@ export default function App() {
                       )}
                     </button>
                   )}
+                </div>
+              )}
+
+              {/* Google Drive Sync Widget */}
+              {((sendMode === 'image' && realImageDataUrl) ||
+                (sendMode === 'video' && realVideoDataUrl) ||
+                (sendMode === 'audio' && realAudioDataUrl)) && (
+                <div className="p-3 bg-zinc-900/90 border border-emerald-500/30 rounded-2xl flex items-center justify-between gap-3 shadow-md">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-9 h-9 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
+                      <HardDrive className="w-4.5 h-4.5" />
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold text-zinc-200">Google Drive Integration</p>
+                      <p className="text-[11px] text-zinc-400">
+                        {googleDriveLink ? 'Synced to your Google Drive successfully!' : 'Upload & backup directly to Google Drive'}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={handleSyncToGoogleDrive}
+                    disabled={isUploadingToDrive}
+                    className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-xl transition-all shadow-md flex items-center gap-1.5 shrink-0 disabled:opacity-50 active:scale-95"
+                  >
+                    {isUploadingToDrive ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        Syncing...
+                      </>
+                    ) : (
+                      <>
+                        <Upload className="w-3.5 h-3.5" />
+                        {googleDriveLink ? 'Re-Sync Drive' : 'Sync to Drive'}
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
+
+              {googleDriveLink && (
+                <div className="text-xs bg-zinc-950/80 p-3 rounded-xl border border-emerald-500/20 flex items-center justify-between gap-2">
+                  <span className="text-zinc-300 truncate font-mono text-[11px]">{googleDriveLink}</span>
+                  <a
+                    href={googleDriveLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-emerald-400 hover:underline shrink-0 text-xs font-semibold flex items-center gap-1"
+                  >
+                    Open Drive Link ↗
+                  </a>
                 </div>
               )}
 

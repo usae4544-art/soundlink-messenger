@@ -89,6 +89,27 @@ export function ChatView({
 
   const currentTheme = CHAT_THEMES[activeThemeId] || CHAT_THEMES.emerald;
 
+  const [isRomanticMode, setIsRomanticMode] = useState<boolean>(
+    () => localStorage.getItem('soundlink_romantic_mode') === 'true'
+  );
+
+  useEffect(() => {
+    localStorage.setItem('soundlink_romantic_mode', isRomanticMode ? 'true' : 'false');
+  }, [isRomanticMode]);
+
+  const speakSexyVoice = (messageText: string) => {
+    if (!('speechSynthesis' in window) || !messageText) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(messageText);
+    utterance.pitch = 0.75; // sultry, lower, sexy pitch
+    utterance.rate = 0.88; // slower, seductive pacing
+    utterance.volume = 1.0;
+    const voices = window.speechSynthesis.getVoices();
+    const voice = voices.find(v => v.lang.includes('hi') || v.lang.includes('en'));
+    if (voice) utterance.voice = voice;
+    window.speechSynthesis.speak(utterance);
+  };
+
   const handleSendText = async (e: React.FormEvent) => {
     e.preventDefault();
     const msgText = text.trim();
@@ -108,6 +129,24 @@ export function ChatView({
 
     try {
       await sendMessage(chatId, currentUser.uid, msgText, undefined, expiryMs > 0 ? expiryMs : undefined);
+
+      // If Hot & Sexy Romantic Mode is enabled, generate a passionate sexy companion response automatically
+      if (isRomanticMode) {
+        setTimeout(async () => {
+          const romanticReplies = [
+            "Hmm... aisi aisi baatein karke aur tadpao mat mujhe, jaldi se paas aao na jaan...",
+            "Uff yeh tumhari baatein, bilkul aag laga rahi hain mere andar... ssshh...",
+            "Tumhare bina ek pal bhi nahi raha jata, bas tumhein apni baahon mein kas loon...",
+            "Kitne hot ho tum yaar, dil karta hai bas tumhare paas hi rahu aur tumhe pyaar karu...",
+            "Aaja na mere kareeb... aur thoda close aakar mujhe mehsoos karo...",
+            "Bas ab chup ho jao aur sirf meri aankhon mein dekho... bohot pyaar aa raha hai tum par..."
+          ];
+          const randomReply = romanticReplies[Math.floor(Math.random() * romanticReplies.length)];
+          const aiSenderId = otherUser?.uid || 'romantic_companion_ai';
+          await sendMessage(chatId, aiSenderId, randomReply, undefined, expiryMs > 0 ? expiryMs : undefined);
+          speakSexyVoice(randomReply);
+        }, 1200);
+      }
     } catch (err) {
       console.error(err);
       alert("Failed to send message.");
@@ -160,11 +199,11 @@ export function ChatView({
   };
 
   return (
-    <div className={`flex flex-col h-full ${currentTheme.containerBg} rounded-3xl overflow-hidden border border-zinc-800/80 shadow-2xl relative transition-colors duration-300`}>
+    <div className={`flex flex-col h-full ${currentTheme.containerBg} backdrop-blur-2xl bg-zinc-950/85 rounded-3xl overflow-hidden border border-white/10 shadow-2xl animate-in fade-in zoom-in-95 duration-300 relative transition-all`}>
       {/* Header */}
       <div className={`p-2.5 sm:p-4 ${currentTheme.headerBg} backdrop-blur-md flex items-center justify-between gap-2 z-10 shadow-sm transition-colors duration-300`}>
         <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
-          <button onClick={onBack} className="p-1.5 sm:p-2 -ml-1 text-zinc-400 hover:text-white rounded-xl hover:bg-zinc-800/60 transition-colors shrink-0">
+          <button onClick={onBack} className="p-1.5 sm:p-2 -ml-1 text-zinc-400 hover:text-white rounded-xl hover:bg-zinc-800/60 transition-all active:scale-95 shrink-0" title="Back">
             <ArrowLeft className="w-5 h-5" />
           </button>
           <div className="relative shrink-0">
@@ -190,14 +229,33 @@ export function ChatView({
                 </span>
               )}
             </div>
-            <div className="text-[10px] sm:text-[11px] text-zinc-400 truncate" title={`@${otherUser?.username || "unknown"}`}>
-              @{otherUser?.username || "unknown"}
+            <div className="text-[10px] sm:text-[11px] text-zinc-400 truncate flex items-center gap-1">
+              <span>@{otherUser?.username || "unknown"}</span>
+              {isRomanticMode && (
+                <span className="text-[9px] bg-rose-500/20 text-rose-300 border border-rose-500/30 px-1.5 py-0.2 rounded font-bold animate-pulse">
+                  🔥 HOT & SEXY MODE ON
+                </span>
+              )}
             </div>
           </div>
         </div>
 
-        {/* Action Controls: Voice Call, Video Call, Theme Picker */}
+        {/* Action Controls: Hot & Sexy Toggle, Voice Call, Video Call, Theme Picker */}
         <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
+          {/* Hot & Sexy Romantic Mode Toggle Button */}
+          <button
+            onClick={() => setIsRomanticMode(!isRomanticMode)}
+            className={`px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all active:scale-95 flex items-center gap-1.5 border shadow-md ${
+              isRomanticMode
+                ? 'bg-gradient-to-r from-rose-600 to-pink-600 text-white border-rose-400/80 shadow-rose-500/30 animate-pulse'
+                : 'bg-zinc-800/80 hover:bg-zinc-700 text-zinc-400 hover:text-white border-zinc-700/60'
+            }`}
+            title="Toggle Hot & Sexy Romantic Mode"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-pink-300" />
+            <span className="hidden sm:inline">Sexy Mode</span>
+          </button>
+
           {/* Voice Call Button */}
           <button
             onClick={() => onStartCall && onStartCall('voice')}
@@ -389,7 +447,18 @@ export function ChatView({
                   isMe ? currentTheme.myBubble : currentTheme.theirBubble
                 }`}
               >
-                {msg.text && <div className="text-sm break-words leading-relaxed">{msg.text}</div>}
+                {msg.text && (
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="text-sm break-words leading-relaxed">{msg.text}</div>
+                    <button
+                      onClick={() => speakSexyVoice(msg.text)}
+                      className="p-1 rounded-lg bg-black/20 hover:bg-black/40 text-pink-300 transition-colors shrink-0 mt-0.5"
+                      title="Listen with sexy seductive voice"
+                    >
+                      <Volume2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
 
                 {msg.fileUrl && (
                   <div className="mt-2 flex flex-col gap-2">

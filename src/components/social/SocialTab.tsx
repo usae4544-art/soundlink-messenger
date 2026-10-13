@@ -113,9 +113,14 @@ export function SocialTab({ user, userProfile, onDecodeRequest }: Props) {
       setIsLoadingChats(false);
     });
 
+    const loadFallbackTimer = setTimeout(() => {
+      setIsLoadingChats(false);
+    }, 1200);
+
     return () => {
       unsubReqs();
       unsubChats();
+      clearTimeout(loadFallbackTimer);
     };
   }, [user?.uid]);
 
